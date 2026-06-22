@@ -1,0 +1,69 @@
+import { defineConfig } from 'tsup';
+
+export default defineConfig({
+  entry: {
+    index: 'src/index.ts',
+    cli: 'src/cli.ts',
+    'vector/collection-manager': 'src/vector/collection-manager.ts',
+    'vector/zvec-adapter': 'src/vector/zvec-adapter.ts',
+    'vector/code-to-vectors': 'src/vector/code-to-vectors.ts',
+    'vector/vectorize-command': 'src/vector/vectorize-command.ts',
+    'vector/embedding/index': 'src/vector/embedding/index.ts',
+    'fusion/query-engine': 'src/fusion/query-engine.ts',
+    'fusion/intent-router': 'src/fusion/intent-router.ts',
+    'fusion/context-budget': 'src/fusion/context-budget.ts',
+    'fusion/queryEngine': 'src/fusion/queryEngine.ts',
+    'fusion/intentRouter': 'src/fusion/intentRouter.ts',
+    'fusion/contextBudget': 'src/fusion/contextBudget.ts',
+    'freshness/freshness-gate': 'src/freshness/freshness-gate.ts',
+    'freshness/freshnessGate': 'src/freshness/freshnessGate.ts',
+    'freshness/fusion-store': 'src/freshness/fusion-store.ts',
+    'freshness/manifest': 'src/freshness/manifest.ts',
+    'freshness/semantic-status': 'src/freshness/semantic-status.ts',
+    'behavior/graph-review': 'src/behavior/graph-review.ts',
+    'behavior/graphReview': 'src/behavior/graphReview.ts',
+    'behavior/review-command': 'src/behavior/review-command.ts',
+    'behavior/dedup-check': 'src/behavior/dedup-check.ts',
+    'behavior/dedupCheck': 'src/behavior/dedupCheck.ts',
+    'behavior/dedup-command': 'src/behavior/dedup-command.ts',
+    'behavior/impact-yagni': 'src/behavior/impact-yagni.ts',
+    'behavior/impactYagni': 'src/behavior/impactYagni.ts',
+    'mcp/tool-registry': 'src/mcp/tool-registry.ts',
+    'mcp/unified-server': 'src/mcp/unified-server.ts',
+    'mcp/unifiedServer': 'src/mcp/unifiedServer.ts',
+    'installer/unified-installer': 'src/installer/unified-installer.ts',
+    'installer/unifiedInstaller': 'src/installer/unifiedInstaller.ts',
+    'freshness/auto-sync': 'src/freshness/auto-sync.ts',
+    'freshness/autoSync': 'src/freshness/autoSync.ts',
+    'bridge/headroom-adapter': 'src/bridge/headroom-adapter.ts',
+    'bridge/headroomAdapter': 'src/bridge/headroomAdapter.ts',
+    'compression/ccr-store': 'src/compression/ccr-store.ts',
+    'compression/ccrStore': 'src/compression/ccrStore.ts',
+    'compression/compression-strategy': 'src/compression/compression-strategy.ts',
+    'compression/compressionStrategy': 'src/compression/compressionStrategy.ts',
+    'compression/fusion-compressor': 'src/compression/fusion-compressor.ts',
+    'compression/fusionCompressor': 'src/compression/fusionCompressor.ts',
+    'compression/relevance-scorer': 'src/compression/relevance-scorer.ts',
+    'compression/relevanceScorer': 'src/compression/relevanceScorer.ts',
+    'compression/cache-aligner': 'src/compression/cache-aligner.ts',
+    'compression/cacheAligner': 'src/compression/cacheAligner.ts'
+  },
+  format: ['esm', 'cjs'],
+  platform: 'node',
+  target: 'es2022',
+  external: ['node:sqlite', 'tree-sitter-wasms', 'web-tree-sitter'],
+  dts: true,
+  sourcemap: true,
+  clean: true,
+  splitting: false,
+  shims: true,
+  async onSuccess() {
+    const { mkdirSync, writeFileSync } = await import('node:fs');
+    mkdirSync('dist/vector', { recursive: true });
+    writeFileSync(
+      'dist/vector/collection-manager',
+      "module.exports = require('./collection-manager.cjs');\n",
+      { mode: 0o644 }
+    );
+  }
+});

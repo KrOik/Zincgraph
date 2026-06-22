@@ -1,0 +1,28 @@
+export const WEIGHTS: Record<string, number>;
+export const QUALITY_WEIGHTS: Record<string, number>;
+export const TASKS: readonly unknown[];
+export function clamp(value: number): number;
+export interface DimensionScores { retrieval: number; density: number; runtime: number; depth: number; freshness: number; capability: number }
+export function scoreTask(result: Record<string, any>, task: Record<string, any>, context?: Record<string, any>): DimensionScores;
+export function scoreFreshness(result: Record<string, any>, task: Record<string, any>): number;
+export function densityRawFor(result: Record<string, any>): number;
+export function summarizeArmScores(tasks: Array<Record<string, any>>, includeDelegatedInWinner?: boolean): { arms: Record<string, any>; winner: string | null; diagnosticWinner: string | null };
+export function summarizeQualityOnlyArms(arms: Record<string, any>): { weights: Record<string, number>; arms: Record<string, any>; winner: string | null };
+export function qualityOnlyTotal(dimensionScores: Record<string, number>, weights?: Record<string, number>): number;
+export function createReport(summary: Record<string, any>): string;
+export function fingerprintRoots(projectPath: string, roots?: string[]): Record<string, any>;
+export function diffFingerprints(before: Record<string, any>, after: Record<string, any>): { changedPaths: string[]; sqliteVolatilePaths: string[] };
+export function zeroScores(): DimensionScores;
+export function normalizeRunCount(value: unknown): number;
+export function createRunSlots(runs: unknown): number[];
+export function aggregateRunRecords(records: Array<Record<string, any>>): Record<string, any>;
+export function persistDiagnosticTranscripts(tasks: Array<Record<string, any>>, resultDir: string): Record<string, any>;
+export function selectScoringRun(successfulRuns: Array<Record<string, any>>): Record<string, any> | null;
+export function analyzeOutput(input: Record<string, any>): Record<string, any>;
+export function applyNormalizedScores(results: Array<Record<string, any>>): Record<string, any>;
+export function countFreshnessTermHits(output: string): number;
+export function countFreshnessCooccurrenceHits(output: string): number;
+export function createSpawnOptions(cwd: string, timeout?: number): Record<string, any>;
+export function runPreflight(projectPath: string, paths?: Record<string, string>): Record<string, any>;
+export function runBenchmarkTask(task: Record<string, any>, arm: string, commandSpec: any, projectPath: string, runs: number): Promise<Record<string, any>>;
+export function runIsolatedUpdateTask(arm: string, task: Record<string, any>, runs: number, runner?: (...args: any[]) => Promise<Record<string, any>>): Promise<Record<string, any>>;

@@ -1,0 +1,239 @@
+{
+  "name": "zincgraph",
+  "version": "0.1.0",
+  "description": "End-to-end code quality platform for AI coding agents.",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./fusion/query-engine": {
+      "types": "./dist/fusion/query-engine.d.ts",
+      "import": "./dist/fusion/query-engine.js",
+      "require": "./dist/fusion/query-engine.cjs"
+    },
+    "./fusion/queryEngine": {
+      "types": "./dist/fusion/queryEngine.d.ts",
+      "import": "./dist/fusion/queryEngine.js",
+      "require": "./dist/fusion/queryEngine.cjs"
+    },
+    "./fusion/intent-router": {
+      "types": "./dist/fusion/intent-router.d.ts",
+      "import": "./dist/fusion/intent-router.js",
+      "require": "./dist/fusion/intent-router.cjs"
+    },
+    "./fusion/intentRouter": {
+      "types": "./dist/fusion/intentRouter.d.ts",
+      "import": "./dist/fusion/intentRouter.js",
+      "require": "./dist/fusion/intentRouter.cjs"
+    },
+    "./fusion/context-budget": {
+      "types": "./dist/fusion/context-budget.d.ts",
+      "import": "./dist/fusion/context-budget.js",
+      "require": "./dist/fusion/context-budget.cjs"
+    },
+    "./fusion/contextBudget": {
+      "types": "./dist/fusion/contextBudget.d.ts",
+      "import": "./dist/fusion/contextBudget.js",
+      "require": "./dist/fusion/contextBudget.cjs"
+    },
+    "./freshness/freshness-gate": {
+      "types": "./dist/freshness/freshness-gate.d.ts",
+      "import": "./dist/freshness/freshness-gate.js",
+      "require": "./dist/freshness/freshness-gate.cjs"
+    },
+    "./freshness/freshnessGate": {
+      "types": "./dist/freshness/freshnessGate.d.ts",
+      "import": "./dist/freshness/freshnessGate.js",
+      "require": "./dist/freshness/freshnessGate.cjs"
+    },
+    "./behavior/graph-review": {
+      "types": "./dist/behavior/graph-review.d.ts",
+      "import": "./dist/behavior/graph-review.js",
+      "require": "./dist/behavior/graph-review.cjs"
+    },
+    "./behavior/graphReview": {
+      "types": "./dist/behavior/graphReview.d.ts",
+      "import": "./dist/behavior/graphReview.js",
+      "require": "./dist/behavior/graphReview.cjs"
+    },
+    "./behavior/review-command": {
+      "types": "./dist/behavior/review-command.d.ts",
+      "import": "./dist/behavior/review-command.js",
+      "require": "./dist/behavior/review-command.cjs"
+    },
+    "./behavior/dedup-check": {
+      "types": "./dist/behavior/dedup-check.d.ts",
+      "import": "./dist/behavior/dedup-check.js",
+      "require": "./dist/behavior/dedup-check.cjs"
+    },
+    "./behavior/dedupCheck": {
+      "types": "./dist/behavior/dedupCheck.d.ts",
+      "import": "./dist/behavior/dedupCheck.js",
+      "require": "./dist/behavior/dedupCheck.cjs"
+    },
+    "./behavior/dedup-command": {
+      "types": "./dist/behavior/dedup-command.d.ts",
+      "import": "./dist/behavior/dedup-command.js",
+      "require": "./dist/behavior/dedup-command.cjs"
+    },
+    "./behavior/impact-yagni": {
+      "types": "./dist/behavior/impact-yagni.d.ts",
+      "import": "./dist/behavior/impact-yagni.js",
+      "require": "./dist/behavior/impact-yagni.cjs"
+    },
+    "./behavior/impactYagni": {
+      "types": "./dist/behavior/impactYagni.d.ts",
+      "import": "./dist/behavior/impactYagni.js",
+      "require": "./dist/behavior/impactYagni.cjs"
+    },
+    "./mcp/tool-registry": {
+      "types": "./dist/mcp/tool-registry.d.ts",
+      "import": "./dist/mcp/tool-registry.js",
+      "require": "./dist/mcp/tool-registry.cjs"
+    },
+    "./mcp/unified-server": {
+      "types": "./dist/mcp/unified-server.d.ts",
+      "import": "./dist/mcp/unified-server.js",
+      "require": "./dist/mcp/unified-server.cjs"
+    },
+    "./mcp/unifiedServer": {
+      "types": "./dist/mcp/unifiedServer.d.ts",
+      "import": "./dist/mcp/unifiedServer.js",
+      "require": "./dist/mcp/unifiedServer.cjs"
+    },
+    "./installer/unified-installer": {
+      "types": "./dist/installer/unified-installer.d.ts",
+      "import": "./dist/installer/unified-installer.js",
+      "require": "./dist/installer/unified-installer.cjs"
+    },
+    "./installer/unifiedInstaller": {
+      "types": "./dist/installer/unifiedInstaller.d.ts",
+      "import": "./dist/installer/unifiedInstaller.js",
+      "require": "./dist/installer/unifiedInstaller.cjs"
+    },
+    "./freshness/auto-sync": {
+      "types": "./dist/freshness/auto-sync.d.ts",
+      "import": "./dist/freshness/auto-sync.js",
+      "require": "./dist/freshness/auto-sync.cjs"
+    },
+    "./freshness/autoSync": {
+      "types": "./dist/freshness/autoSync.d.ts",
+      "import": "./dist/freshness/autoSync.js",
+      "require": "./dist/freshness/autoSync.cjs"
+    },
+    "./bridge/headroom-adapter": {
+      "types": "./dist/bridge/headroom-adapter.d.ts",
+      "import": "./dist/bridge/headroom-adapter.js",
+      "require": "./dist/bridge/headroom-adapter.cjs"
+    },
+    "./bridge/headroomAdapter": {
+      "types": "./dist/bridge/headroomAdapter.d.ts",
+      "import": "./dist/bridge/headroomAdapter.js",
+      "require": "./dist/bridge/headroomAdapter.cjs"
+    },
+    "./compression/ccr-store": {
+      "types": "./dist/compression/ccr-store.d.ts",
+      "import": "./dist/compression/ccr-store.js",
+      "require": "./dist/compression/ccr-store.cjs"
+    },
+    "./compression/ccrStore": {
+      "types": "./dist/compression/ccrStore.d.ts",
+      "import": "./dist/compression/ccrStore.js",
+      "require": "./dist/compression/ccrStore.cjs"
+    },
+    "./compression/compression-strategy": {
+      "types": "./dist/compression/compression-strategy.d.ts",
+      "import": "./dist/compression/compression-strategy.js",
+      "require": "./dist/compression/compression-strategy.cjs"
+    },
+    "./compression/compressionStrategy": {
+      "types": "./dist/compression/compressionStrategy.d.ts",
+      "import": "./dist/compression/compressionStrategy.js",
+      "require": "./dist/compression/compressionStrategy.cjs"
+    },
+    "./compression/fusion-compressor": {
+      "types": "./dist/compression/fusion-compressor.d.ts",
+      "import": "./dist/compression/fusion-compressor.js",
+      "require": "./dist/compression/fusion-compressor.cjs"
+    },
+    "./compression/fusionCompressor": {
+      "types": "./dist/compression/fusionCompressor.d.ts",
+      "import": "./dist/compression/fusionCompressor.js",
+      "require": "./dist/compression/fusionCompressor.cjs"
+    },
+    "./compression/relevance-scorer": {
+      "types": "./dist/compression/relevance-scorer.d.ts",
+      "import": "./dist/compression/relevance-scorer.js",
+      "require": "./dist/compression/relevance-scorer.cjs"
+    },
+    "./compression/relevanceScorer": {
+      "types": "./dist/compression/relevanceScorer.d.ts",
+      "import": "./dist/compression/relevanceScorer.js",
+      "require": "./dist/compression/relevanceScorer.cjs"
+    },
+    "./compression/cache-aligner": {
+      "types": "./dist/compression/cache-aligner.d.ts",
+      "import": "./dist/compression/cache-aligner.js",
+      "require": "./dist/compression/cache-aligner.cjs"
+    },
+    "./compression/cacheAligner": {
+      "types": "./dist/compression/cacheAligner.d.ts",
+      "import": "./dist/compression/cacheAligner.js",
+      "require": "./dist/compression/cacheAligner.cjs"
+    }
+  },
+  "bin": {
+    "zincgraph": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "clean": "node --run clean:dist",
+    "clean:dist": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "smoke:dist": "node tests/smoke/import-dist-compat.mjs",
+    "benchmark:compare": "npm run build --silent && node bench/compare.mjs"
+  },
+  "keywords": [
+    "code-intelligence",
+    "codegraph",
+    "mcp",
+    "static-analysis"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.5.1",
+    "@colbymchenry/codegraph": "^1.0.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@zvec/zvec": "^0.5.0",
+    "commander": "^14.0.2",
+    "headroom-ai": "^0.22.4",
+    "ponytail-mcp": "file:./refer/ponytail/ponytail-mcp",
+    "tree-sitter-wasms": "^0.1.13",
+    "web-tree-sitter": "^0.25.10",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "esbuild": "^0.28.1",
+    "tsup": "^8.5.1",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9"
+  },
+  "overrides": {
+    "esbuild": "^0.28.1"
+  }
+}
