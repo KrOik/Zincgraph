@@ -1,0 +1,6 @@
+[submodule "refer/ponytail"]
+	path = refer/ponytail
+	url = https://github.com/DietrichGebert/ponytail
+[submodule "refer/zvec"]
+	path = refer/zvec
+	url = https://github.com/alibaba/zvec.git
