@@ -11,6 +11,7 @@ import {
 } from '../vector/code-to-vectors.js';
 import { DEFAULT_CHUNKER_VERSION } from '../vector/chunker.js';
 import { openCollection } from '../vector/collection-manager.js';
+import { detectContentType } from '../compression/compression-strategy.js';
 import { tokenizeCodeText } from '../vector/embedding/local.js';
 import { filterEquals, type VectorSearchResult } from '../vector/zvec-adapter.js';
 import {
@@ -21,7 +22,14 @@ import {
 } from './context-budget.js';
 import type { FusionCompressionAdapter } from '../compression/fusion-compressor.js';
 import type { RelevanceScorerAdapter } from '../compression/relevance-scorer.js';
+import type { DynamicFusionPolicy, RankingAdjustments } from '../compression/ranking-adjuster.js';
 import { parseFusionQuery, queryTerms, type ParsedFusionQuery, type QueryRoute, type ScalarFilters } from './intent-router.js';
+
+export function routeWeightValue(route: QueryRoute, source: FusionSource, adjustments?: RankingAdjustments): number {
+  const base = FUSION_RANKING_POLICY.routeWeights[route][source];
+  const override = adjustments?.routeWeightOverrides?.[route]?.[source];
+  return override ?? base;
+}
 
 export type FusionSource = EvidenceSource;
 
@@ -81,12 +89,17 @@ export interface QueryEngineDependencies {
   compressResults?: FusionCompressionAdapter;
   relevanceScorer?: RelevanceScorerAdapter;
   relevanceMode?: 'bm25' | 'embedding' | 'hybrid';
+  dynamicPolicy?: DynamicFusionPolicy;
 }
 
 export interface TopoSemanticQueryEngineOptions {
   topk?: number;
   maxTokens?: number;
   dependencies?: Partial<QueryEngineDependencies>;
+}
+
+export function setDynamicPolicy(engine: TopoSemanticQueryEngine, policy: DynamicFusionPolicy | undefined): void {
+  engine.setDynamicPolicy(policy);
 }
 
 interface CandidateDraft {
@@ -157,6 +170,7 @@ export class TopoSemanticQueryEngine {
   private readonly topk: number;
   private readonly maxTokens: number;
   private readonly dependencies: QueryEngineDependencies;
+  dynamicPolicy: DynamicFusionPolicy | undefined = undefined;
 
   constructor(projectPath = process.cwd(), options: TopoSemanticQueryEngineOptions = {}) {
     this.projectPath = resolve(projectPath);
@@ -169,6 +183,11 @@ export class TopoSemanticQueryEngine {
       readFreshness: defaultReadFreshness,
       ...options.dependencies
     };
+    this.dynamicPolicy = this.dependencies.dynamicPolicy ?? undefined;
+  }
+
+  setDynamicPolicy(policy: DynamicFusionPolicy | undefined): void {
+    this.dynamicPolicy = policy;
   }
 
   async query(query: string, options: FusionQueryOptions = {}): Promise<ContextCapsule> {
@@ -179,15 +198,17 @@ export class TopoSemanticQueryEngine {
     const documentByNode = mapDocumentsByNode(storedDocuments);
     const freshness = this.dependencies.readFreshness(this.projectPath);
 
-    const graphCandidates = this.graphCandidates(snapshot, parsed, documentByNode);
-    const vectorCandidates = await this.vectorCandidates(parsed, topk * 4, documentByNode);
-    const textCandidates = this.textCandidates(parsed, storedDocuments);
+    const adjustments = this.dynamicPolicy?.adjustments;
+    const graphCandidates = this.graphCandidates(snapshot, parsed, documentByNode, adjustments);
+    const vectorCandidates = await this.vectorCandidates(parsed, topk * 4, documentByNode, adjustments);
+    const textCandidates = this.textCandidates(parsed, storedDocuments, adjustments);
 
     const nodes = mergeCandidates(
       [...graphCandidates, ...vectorCandidates, ...textCandidates],
       snapshot,
       freshness,
-      parsed
+      parsed,
+      adjustments
     ).slice(0, topk);
 
     const documents = nodes
@@ -197,13 +218,17 @@ export class TopoSemanticQueryEngine {
 
     let contextNodes = nodes;
     if (this.dependencies.compressResults) {
+      const compressionStrategy = selectCompressionStrategy(nodes, adjustments);
       const compressionResult = await this.dependencies.compressResults.compress(nodes, {
-        maxTokens: options.maxTokens ?? this.maxTokens
+        maxTokens: options.maxTokens ?? this.maxTokens,
+        strategy: compressionStrategy
       });
       contextNodes = compressionResult.compressedCandidates;
     }
 
     const context = applyContextBudget(contextNodes, { maxTokens: options.maxTokens ?? this.maxTokens });
+    const outputNodes = this.dependencies.compressResults ? contextNodes : nodes;
+    const outputDocuments = this.dependencies.compressResults ? [] : documents;
 
     const policy: FusionPolicy = { textBranch: 'fusion-store-token-overlap', nativeFts: false };
     if (this.dependencies.relevanceScorer) {
@@ -217,9 +242,9 @@ export class TopoSemanticQueryEngine {
       strippedQuery: parsed.text,
       route: parsed.route,
       filters: parsed.filters,
-      nodes,
-      documents,
-      edges: edgesForNodes(snapshot, nodes),
+      nodes: outputNodes,
+      documents: outputDocuments,
+      edges: edgesForNodes(snapshot, outputNodes),
       freshness,
       policy,
       warnings: freshness.warnings,
@@ -234,7 +259,8 @@ export class TopoSemanticQueryEngine {
   private graphCandidates(
     snapshot: CodeGraphSnapshot,
     parsed: ParsedFusionQuery,
-    documentByNode: ReadonlyMap<string, VectorDocument>
+    documentByNode: ReadonlyMap<string, VectorDocument>,
+    adjustments?: RankingAdjustments
   ): CandidateDraft[] {
     const terms = queryTerms(parsed.text, parsed.filters);
     const candidates: CandidateDraft[] = [];
@@ -254,7 +280,7 @@ export class TopoSemanticQueryEngine {
         kind: node.kind,
         qualifiedName: node.qualifiedName,
         contentHash: document?.contentHash ?? '',
-        score: applyRouteWeight(score, parsed.route, 'graph'),
+        score: applyRouteWeight(score, parsed.route, 'graph', adjustments),
         source: 'graph',
         content: document?.content ?? buildNodeText(node)
       });
@@ -265,7 +291,8 @@ export class TopoSemanticQueryEngine {
   private async vectorCandidates(
     parsed: ParsedFusionQuery,
     topk: number,
-    documentByNode: ReadonlyMap<string, VectorDocument>
+    documentByNode: ReadonlyMap<string, VectorDocument>,
+    adjustments?: RankingAdjustments
   ): Promise<CandidateDraft[]> {
     const text = parsed.text || parsed.filters.name || parsed.original;
     if (!text.trim()) {
@@ -284,14 +311,14 @@ export class TopoSemanticQueryEngine {
           kind: result.kind,
           qualifiedName: result.qualifiedName,
           contentHash: result.contentHash,
-          score: applyRouteWeight(normalizeScore(result.score), parsed.route, 'vector'),
+          score: applyRouteWeight(normalizeScore(result.score), parsed.route, 'vector', adjustments),
           source: 'vector' as const,
           content: document?.content ?? result.qualifiedName
         };
       });
   }
 
-  private textCandidates(parsed: ParsedFusionQuery, storedDocuments: readonly StoredVectorDocument[]): CandidateDraft[] {
+  private textCandidates(parsed: ParsedFusionQuery, storedDocuments: readonly StoredVectorDocument[], adjustments?: RankingAdjustments): CandidateDraft[] {
     const terms = queryTerms(parsed.text, parsed.filters);
     if (terms.length === 0 && !hasAnyFilter(parsed.filters)) {
       return [];
@@ -313,7 +340,7 @@ export class TopoSemanticQueryEngine {
         kind: document.kind,
         qualifiedName: document.qualifiedName,
         contentHash: document.contentHash,
-        score: applyRouteWeight(score, parsed.route, 'fts'),
+        score: applyRouteWeight(score, parsed.route, 'fts', adjustments),
         source: 'fts',
         content: document.content
       });
@@ -344,8 +371,8 @@ export function routeWeight(route: QueryRoute, source: FusionSource): number {
   return FUSION_RANKING_POLICY.routeWeights[route][source];
 }
 
-function applyRouteWeight(score: number, route: QueryRoute, source: FusionSource): number {
-  return score * routeWeight(route, source);
+function applyRouteWeight(score: number, route: QueryRoute, source: FusionSource, adjustments?: RankingAdjustments): number {
+  return score * routeWeightValue(route, source, adjustments);
 }
 
 function defaultReadSnapshot(projectPath: string): CodeGraphSnapshot {
@@ -581,8 +608,13 @@ function mergeCandidates(
   candidates: readonly CandidateDraft[],
   snapshot: CodeGraphSnapshot,
   freshness: FreshnessSnapshot,
-  parsed: ParsedFusionQuery
+  parsed: ParsedFusionQuery,
+  adjustments?: RankingAdjustments
 ): FusionNode[] {
+  const fusionBoosts = {
+    ...FUSION_RANKING_POLICY.fusionBoosts,
+    ...(adjustments?.fusionBoostOverrides ?? {})
+  };
   const byNode = new Map<string, FusionNode>();
   for (const candidate of candidates) {
     const existing = byNode.get(candidate.nodeId);
@@ -619,15 +651,19 @@ function mergeCandidates(
     .map((node) => {
       let score =
         node.score +
-        Math.max(0, node.sources.length - 1) * FUSION_RANKING_POLICY.fusionBoosts.multiSourceBonusPerAdditionalSource;
+        Math.max(0, node.sources.length - 1) * fusionBoosts.multiSourceBonusPerAdditionalSource;
       if (node.sources.includes('graph')) {
-        score *= FUSION_RANKING_POLICY.fusionBoosts.graphExactMultiplier;
+        score *= fusionBoosts.graphExactMultiplier;
       }
       const snapshotNode = nodesById.get(node.nodeId);
       if (snapshotNode && hasCallProximity(snapshotNode, terms)) {
-        score *= FUSION_RANKING_POLICY.fusionBoosts.callProximityMultiplier;
+        score *= fusionBoosts.callProximityMultiplier;
       }
       score += formulaicBroadQueryBoost(node, terms, parsed.route);
+      const kindBoost = adjustments?.kindBoosts?.[node.kind];
+      if (kindBoost) {
+        score += kindBoost;
+      }
       const freshnessState = freshnessByFile.get(node.filePath);
       const warnings: string[] = [];
       if (freshnessState && freshnessState !== 'fresh') {
@@ -681,6 +717,52 @@ function diversifyBroadHybridResults(nodes: FusionNode[], parsed: ParsedFusionQu
     }
   }
   return selected;
+}
+
+function selectCompressionStrategy(
+  nodes: readonly FusionNode[],
+  adjustments?: RankingAdjustments
+): 'auto' | 'aggressive' | 'conservative' | 'off' {
+  const settings = adjustments?.compressionAggressiveness;
+  if (!settings || Object.keys(settings).length === 0) {
+    return 'auto';
+  }
+
+  let sawAggressive = false;
+  let sawConservative = false;
+  let sawOff = false;
+
+  for (const node of nodes) {
+    const categories = new Set<string>([
+      detectContentType(node.content),
+      node.kind,
+      ...node.sources
+    ]);
+    for (const category of categories) {
+      const level = settings[category];
+      if (!level) {
+        continue;
+      }
+      if (level === 'off') {
+        sawOff = true;
+      } else if (level === 'conservative') {
+        sawConservative = true;
+      } else if (level === 'aggressive') {
+        sawAggressive = true;
+      }
+    }
+  }
+
+  if (sawOff) {
+    return 'off';
+  }
+  if (sawConservative) {
+    return 'conservative';
+  }
+  if (sawAggressive) {
+    return 'aggressive';
+  }
+  return 'auto';
 }
 
 function uncoveredEvidenceTerms(node: FusionNode, terms: readonly string[], covered: ReadonlySet<string>): string[] {

@@ -96,7 +96,8 @@ export {
 
 
 export {
-  TopoSemanticQueryEngine
+  TopoSemanticQueryEngine,
+  setDynamicPolicy
 } from './fusion/query-engine.js';
 export type {
   ContextCapsule,
@@ -303,6 +304,7 @@ export type {
 
 export {
   FusionCompressor,
+  createProjectFusionCompressor,
   COMPRESSION_MARKER,
   HASH_MARKER
 } from './compression/fusion-compressor.js';
@@ -339,3 +341,64 @@ export type {
   StabilizedTools,
   ToolDefinition as CacheAlignerToolDefinition
 } from './compression/cache-aligner.js';
+
+// Phase 6: Feedback loop & compression optimization
+export {
+  CrossTurnContextTracker,
+  PersistentCrossTurnContextTracker,
+  ReviewCompressor,
+  findingSignature,
+  formatReviewCompressionResult
+} from './compression/review-compressor.js';
+export type {
+  AggregatedReviewFinding,
+  ReviewCompressionOptions,
+  ReviewCompressionResult,
+  ReviewCompressorOptions
+} from './compression/review-compressor.js';
+
+export {
+  CompressionFeedbackLoop
+} from './compression/feedback-loop.js';
+export type {
+  CompressionFeedbackLoopOptions,
+  FeedbackSummary
+} from './compression/feedback-loop.js';
+export {
+  FeedbackStore,
+  feedbackStorePath
+} from './compression/feedback-store.js';
+export type {
+  CompressionEvent,
+  FeedbackSource,
+  FeedbackStoreOptions,
+  RankingAdjustmentRecord,
+  RetrievalEvent,
+  ReviewSignatureRecord,
+  SessionLog
+} from './compression/feedback-store.js';
+export {
+  DeterministicLearnIntegrationAdapter,
+  classifySessionLog,
+  createLearnIntegrationAdapter
+} from './compression/learn-integration.js';
+export type {
+  ApplyRulesOptions,
+  FailurePattern,
+  FailurePatternType,
+  GeneratedRule,
+  LearnIntegrationAdapter,
+  LearnIntegrationOptions,
+  LearnResult,
+  RuleFormat
+} from './compression/learn-integration.js';
+export {
+  createFeedbackAwarePolicy,
+  RankingAdjuster
+} from './compression/ranking-adjuster.js';
+export type {
+  CompressionAggressiveness,
+  DynamicFusionPolicy,
+  RankingAdjusterOptions,
+  RankingAdjustments
+} from './compression/ranking-adjuster.js';

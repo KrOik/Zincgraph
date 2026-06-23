@@ -46,7 +46,17 @@ export default defineConfig({
     'compression/relevance-scorer': 'src/compression/relevance-scorer.ts',
     'compression/relevanceScorer': 'src/compression/relevanceScorer.ts',
     'compression/cache-aligner': 'src/compression/cache-aligner.ts',
-    'compression/cacheAligner': 'src/compression/cacheAligner.ts'
+    'compression/cacheAligner': 'src/compression/cacheAligner.ts',
+    'compression/review-compressor': 'src/compression/review-compressor.ts',
+    'compression/reviewCompressor': 'src/compression/reviewCompressor.ts',
+    'compression/feedback-loop': 'src/compression/feedback-loop.ts',
+    'compression/feedbackLoop': 'src/compression/feedbackLoop.ts',
+    'compression/feedback-store': 'src/compression/feedback-store.ts',
+    'compression/feedbackStore': 'src/compression/feedbackStore.ts',
+    'compression/learn-integration': 'src/compression/learn-integration.ts',
+    'compression/learnIntegration': 'src/compression/learnIntegration.ts',
+    'compression/ranking-adjuster': 'src/compression/ranking-adjuster.ts',
+    'compression/rankingAdjuster': 'src/compression/rankingAdjuster.ts'
   },
   format: ['esm', 'cjs'],
   platform: 'node',

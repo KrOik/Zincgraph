@@ -186,6 +186,56 @@
       "types": "./dist/compression/cacheAligner.d.ts",
       "import": "./dist/compression/cacheAligner.js",
       "require": "./dist/compression/cacheAligner.cjs"
+    },
+    "./compression/review-compressor": {
+      "types": "./dist/compression/review-compressor.d.ts",
+      "import": "./dist/compression/review-compressor.js",
+      "require": "./dist/compression/review-compressor.cjs"
+    },
+    "./compression/reviewCompressor": {
+      "types": "./dist/compression/reviewCompressor.d.ts",
+      "import": "./dist/compression/reviewCompressor.js",
+      "require": "./dist/compression/reviewCompressor.cjs"
+    },
+    "./compression/feedback-loop": {
+      "types": "./dist/compression/feedback-loop.d.ts",
+      "import": "./dist/compression/feedback-loop.js",
+      "require": "./dist/compression/feedback-loop.cjs"
+    },
+    "./compression/feedbackLoop": {
+      "types": "./dist/compression/feedbackLoop.d.ts",
+      "import": "./dist/compression/feedbackLoop.js",
+      "require": "./dist/compression/feedbackLoop.cjs"
+    },
+    "./compression/feedback-store": {
+      "types": "./dist/compression/feedback-store.d.ts",
+      "import": "./dist/compression/feedback-store.js",
+      "require": "./dist/compression/feedback-store.cjs"
+    },
+    "./compression/feedbackStore": {
+      "types": "./dist/compression/feedbackStore.d.ts",
+      "import": "./dist/compression/feedbackStore.js",
+      "require": "./dist/compression/feedbackStore.cjs"
+    },
+    "./compression/learn-integration": {
+      "types": "./dist/compression/learn-integration.d.ts",
+      "import": "./dist/compression/learn-integration.js",
+      "require": "./dist/compression/learn-integration.cjs"
+    },
+    "./compression/learnIntegration": {
+      "types": "./dist/compression/learnIntegration.d.ts",
+      "import": "./dist/compression/learnIntegration.js",
+      "require": "./dist/compression/learnIntegration.cjs"
+    },
+    "./compression/ranking-adjuster": {
+      "types": "./dist/compression/ranking-adjuster.d.ts",
+      "import": "./dist/compression/ranking-adjuster.js",
+      "require": "./dist/compression/ranking-adjuster.cjs"
+    },
+    "./compression/rankingAdjuster": {
+      "types": "./dist/compression/rankingAdjuster.d.ts",
+      "import": "./dist/compression/rankingAdjuster.js",
+      "require": "./dist/compression/rankingAdjuster.cjs"
     }
   },
   "bin": {

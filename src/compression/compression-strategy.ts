@@ -62,29 +62,45 @@ export function selectStrategy(node: FusionNode, options: CompressionStrategyOpt
 export function applyStrategy(
   content: string,
   strategy: CompressionStrategyName,
-  maxTokens: number
+  maxTokens: number,
+  mode: CompressionStrategyOptions['strategy'] = 'auto'
 ): CompressionStrategyResult {
   const tokensBefore = estimateTokens(content);
-  if (tokensBefore <= maxTokens) {
+  const effectiveMaxTokens = resolveEffectiveMaxTokens(maxTokens, mode);
+
+  if (tokensBefore <= effectiveMaxTokens) {
     return { strategy, compressed: content, tokensBefore, tokensAfter: tokensBefore };
   }
 
   let compressed: string;
   switch (strategy) {
     case 'smart-crusher':
-      compressed = smartCrusherCompress(content, maxTokens);
+      compressed = smartCrusherCompress(content, effectiveMaxTokens);
       break;
     case 'code-compressor':
-      compressed = codeCompressorCompress(content, maxTokens);
+      compressed = codeCompressorCompress(content, effectiveMaxTokens);
       break;
     case 'intelligent-context':
     case 'pipeline':
     default:
-      compressed = intelligentContextCompress(content, maxTokens);
+      compressed = intelligentContextCompress(content, effectiveMaxTokens);
       break;
   }
 
   return { strategy, compressed, tokensBefore, tokensAfter: estimateTokens(compressed) };
+}
+
+function resolveEffectiveMaxTokens(maxTokens: number, strategy: CompressionStrategyName | CompressionStrategyOptions['strategy']): number {
+  switch (strategy) {
+    case 'aggressive':
+      return Math.max(1, Math.floor(maxTokens * 0.25));
+    case 'conservative':
+      return Math.max(1, Math.ceil(maxTokens * 1.75));
+    case 'off':
+    case 'pipeline':
+    default:
+      return maxTokens;
+  }
 }
 
 function smartCrusherCompress(content: string, maxTokens: number): string {

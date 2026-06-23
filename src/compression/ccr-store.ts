@@ -11,6 +11,7 @@ export interface CcrEntry {
   createdAt: number;
   ttl: number;
   retrievalCount: number;
+  lastRetrievedAt?: number | null;
 }
 
 export interface CcrStoreOptions {
@@ -45,9 +46,17 @@ CREATE TABLE IF NOT EXISTS ccr_entries(
   content_type TEXT NOT NULL DEFAULT 'text',
   created_at INTEGER NOT NULL,
   ttl INTEGER NOT NULL DEFAULT 3600,
-  retrieval_count INTEGER NOT NULL DEFAULT 0
+  retrieval_count INTEGER NOT NULL DEFAULT 0,
+  last_retrieved_at INTEGER
 )
 """)
+columns = [row[1] for row in con.execute("PRAGMA table_info(ccr_entries)").fetchall()]
+if "content_type" not in columns:
+  con.execute("ALTER TABLE ccr_entries ADD COLUMN content_type TEXT NOT NULL DEFAULT 'text'")
+if "retrieval_count" not in columns:
+  con.execute("ALTER TABLE ccr_entries ADD COLUMN retrieval_count INTEGER NOT NULL DEFAULT 0")
+if "last_retrieved_at" not in columns:
+  con.execute("ALTER TABLE ccr_entries ADD COLUMN last_retrieved_at INTEGER")
 con.execute("CREATE INDEX IF NOT EXISTS idx_ccr_entries_created ON ccr_entries(created_at)")
 con.execute("""
 CREATE TABLE IF NOT EXISTS metadata(
@@ -63,7 +72,8 @@ def row_to_ccr(row):
     "contentType": row[2],
     "createdAt": row[3],
     "ttl": row[4],
-    "retrievalCount": row[5]
+    "retrievalCount": row[5],
+    "lastRetrievedAt": row[6]
   }
 
 result = None
@@ -72,18 +82,21 @@ if operation == "init":
 elif operation == "put":
   now = int(time.time())
   con.execute(
-    "INSERT INTO ccr_entries(hash,content,content_type,created_at,ttl,retrieval_count) VALUES(?,?,?,?,?,0) "
-    "ON CONFLICT(hash) DO UPDATE SET content=excluded.content,content_type=excluded.content_type,created_at=excluded.created_at,ttl=excluded.ttl",
+    "INSERT INTO ccr_entries(hash,content,content_type,created_at,ttl,retrieval_count,last_retrieved_at) VALUES(?,?,?,?,?,0,NULL) "
+    "ON CONFLICT(hash) DO UPDATE SET content=excluded.content,content_type=excluded.content_type,created_at=excluded.created_at,ttl=excluded.ttl,last_retrieved_at=excluded.last_retrieved_at",
     (payload["hash"], payload["content"], payload.get("contentType", "text"), now, payload.get("ttl", 3600))
   )
   result = {"hash": payload["hash"]}
 elif operation == "get":
   row = con.execute(
-    "SELECT hash,content,content_type,created_at,ttl,retrieval_count FROM ccr_entries WHERE hash=?",
+    "SELECT hash,content,content_type,created_at,ttl,retrieval_count,last_retrieved_at FROM ccr_entries WHERE hash=?",
     (payload["hash"],)
   ).fetchone()
   if row is not None:
-    con.execute("UPDATE ccr_entries SET retrieval_count=retrieval_count+1 WHERE hash=?", (payload["hash"],))
+    con.execute(
+      "UPDATE ccr_entries SET retrieval_count=retrieval_count+1,last_retrieved_at=? WHERE hash=?",
+      (int(time.time()), payload["hash"])
+    )
     result = row_to_ccr(row)
   else:
     result = None
@@ -96,7 +109,7 @@ elif operation == "search":
     like_clauses = " AND ".join(["content LIKE ?"] * len(terms))
     params = [f"%{t}%" for t in terms]
     rows = con.execute(
-      f"SELECT hash,content,content_type,created_at,ttl,retrieval_count FROM ccr_entries WHERE {like_clauses} ORDER BY created_at DESC LIMIT ?",
+      f"SELECT hash,content,content_type,created_at,ttl,retrieval_count,last_retrieved_at FROM ccr_entries WHERE {like_clauses} ORDER BY created_at DESC LIMIT ?",
       (*params, payload.get("limit", 10))
     ).fetchall()
     result = [row_to_ccr(row) for row in rows]

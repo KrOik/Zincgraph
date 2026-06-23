@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 
 import { FUSION_RANKING_POLICY, TopoSemanticQueryEngine, compareFusionNodes, routeWeight, zvecFilterFor } from '../../src/fusion/query-engine.js';
 import type { FusionNode } from '../../src/fusion/query-engine.js';
+import type { FusionCompressionAdapter } from '../../src/compression/fusion-compressor.js';
 import type { FreshnessSnapshot } from '../../src/freshness/freshness-gate.js';
 import type { CodeGraphSnapshot } from '../../src/vector/code-to-vectors.js';
 import type { VectorSearchResult } from '../../src/vector/zvec-adapter.js';
@@ -162,6 +163,58 @@ describe('Phase 2 TopoSemanticQueryEngine', () => {
     const validate = capsule.nodes.find((node) => node.nodeId === 'node-validate');
     const service = capsule.nodes.find((node) => node.nodeId === 'node-class');
     expect(validate && service ? validate.score > service.score : false).toBe(true);
+  });
+
+  test('applies dynamic policy boosts to later explore results', async () => {
+    const boosted = engine();
+    boosted.setDynamicPolicy({
+      base: FUSION_RANKING_POLICY,
+      adjustments: {
+        kindBoosts: { class: 20 }
+      }
+    });
+
+    const capsule = await boosted.query('token validation', { topk: 5 });
+    expect(capsule.nodes[0]?.nodeId).toBe('node-class');
+  });
+
+  test('invokes the compression adapter when compressResults is provided', async () => {
+    let calls = 0;
+    const compressionAdapter: FusionCompressionAdapter = {
+      compress: async (candidates) => {
+        calls += 1;
+        return {
+          compressedCandidates: candidates.map((candidate) => ({ ...candidate, content: `${candidate.content} [compressed]` })),
+          ccrHashes: new Map<string, string>(),
+          tokensSaved: 1,
+          compressionRatio: 0.5
+        };
+      },
+      retrieve: async () => null,
+      getStats: () => ({
+        totalCompressions: 0,
+        totalTokensBefore: 0,
+        totalTokensAfter: 0,
+        totalTokensSaved: 0,
+        averageCompressionRatio: 0,
+        retrievalCount: 0
+      })
+    };
+    const compressionEngine = new TopoSemanticQueryEngine('/tmp/project', {
+      dependencies: {
+        readSnapshot: () => snapshot,
+        vectorSearch: async () => vectorResults,
+        listVectorDocuments: () => storedDocuments,
+        readFreshness: () => freshness(),
+        compressResults: compressionAdapter
+      }
+    });
+
+    const capsule = await compressionEngine.query('token validation', { topk: 5 });
+    expect(calls).toBe(1);
+    expect(capsule.nodes.length).toBeGreaterThan(0);
+    expect(capsule.nodes.every((node) => node.content.includes('[compressed]'))).toBe(true);
+    expect(capsule.documents).toHaveLength(0);
   });
 
   test('enforces kind filters', async () => {

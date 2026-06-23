@@ -1,11 +1,13 @@
 import type { FusionNode } from '../fusion/query-engine.js';
-import { CcrStore, type CcrStoreOptions } from './ccr-store.js';
+import { CcrStore } from './ccr-store.js';
 import {
   applyStrategy,
   detectContentType,
   selectStrategy,
   type CompressionStrategyOptions
 } from './compression-strategy.js';
+import { CompressionFeedbackLoop } from './feedback-loop.js';
+import type { FeedbackSource } from './feedback-store.js';
 
 export interface FusionCompressionAdapter {
   compress(
@@ -42,6 +44,7 @@ export interface FusionCompressorOptions {
   ccrStore: CcrStore;
   defaultMaxTokens?: number;
   defaultStrategy?: 'auto' | 'aggressive' | 'conservative' | 'off';
+  feedbackLoop?: CompressionFeedbackLoop;
 }
 
 const COMPRESSION_MARKER = '__headroom_compressed';
@@ -51,6 +54,7 @@ export class FusionCompressor implements FusionCompressionAdapter {
   private readonly ccrStore: CcrStore;
   private readonly defaultMaxTokens: number;
   private readonly defaultStrategy: 'auto' | 'aggressive' | 'conservative' | 'off';
+  private readonly feedbackLoop: CompressionFeedbackLoop | undefined;
   private stats: CompressionStats = {
     totalCompressions: 0,
     totalTokensBefore: 0,
@@ -64,6 +68,7 @@ export class FusionCompressor implements FusionCompressionAdapter {
     this.ccrStore = options.ccrStore;
     this.defaultMaxTokens = options.defaultMaxTokens ?? 8000;
     this.defaultStrategy = options.defaultStrategy ?? 'auto';
+    this.feedbackLoop = options.feedbackLoop;
   }
 
   async compress(candidates: FusionNode[], options: CompressionOptions): Promise<FusionCompressionResult> {
@@ -93,7 +98,7 @@ export class FusionCompressor implements FusionCompressionAdapter {
 
     for (const node of candidates) {
       const selectedStrategy = selectStrategy(node, strategyOptions);
-      const result = applyStrategy(node.content, selectedStrategy, perCandidateBudget);
+      const result = applyStrategy(node.content, selectedStrategy, perCandidateBudget, strategy);
       totalTokensBefore += result.tokensBefore;
       totalTokensAfter += result.tokensAfter;
 
@@ -101,6 +106,18 @@ export class FusionCompressor implements FusionCompressionAdapter {
         const hash = await sha256Short(node.content);
         this.ccrStore.put(hash, node.content, detectContentType(node.content));
         ccrHashes.set(node.nodeId, hash);
+
+        if (this.feedbackLoop) {
+          const primarySource = node.sources[0] ?? 'graph';
+          this.feedbackLoop.recordCompression({
+            hash,
+            nodeId: node.nodeId,
+            source: primarySource as FeedbackSource,
+            contentType: detectContentType(node.content),
+            kind: node.kind,
+            compressedAt: Date.now()
+          });
+        }
 
         const compressedNode: FusionNode = {
           ...node,
@@ -156,9 +173,34 @@ export class FusionCompressor implements FusionCompressionAdapter {
   }
 
   static createFromProject(projectPath: string, options?: Partial<FusionCompressorOptions>): FusionCompressor {
-    const storeOptions: CcrStoreOptions = { projectPath };
-    const store = new CcrStore(storeOptions);
-    return new FusionCompressor({ ccrStore: store, ...options });
+    const ccrStore = options?.ccrStore ?? new CcrStore({ projectPath });
+    return new FusionCompressor({ ...options, ccrStore });
+  }
+}
+
+export function createProjectFusionCompressor(projectPath: string, options?: Partial<FusionCompressorOptions>): FusionCompressor {
+  const ccrStore = options?.ccrStore ?? new CcrStore({ projectPath });
+  const feedbackLoop = resolveProjectFeedbackLoop(projectPath, options?.feedbackLoop);
+  return new FusionCompressor({
+    ...options,
+    ccrStore,
+    ...(feedbackLoop ? { feedbackLoop } : {})
+  });
+}
+
+function resolveProjectFeedbackLoop(
+  projectPath: string,
+  feedbackLoop?: CompressionFeedbackLoop
+): CompressionFeedbackLoop | undefined {
+  if (feedbackLoop) {
+    return feedbackLoop;
+  }
+
+  try {
+    return CompressionFeedbackLoop.createFromProject(projectPath);
+  } catch {
+    console.warn(`Compression feedback initialization failed for ${projectPath}; using compressor without feedback.`);
+    return undefined;
   }
 }
 

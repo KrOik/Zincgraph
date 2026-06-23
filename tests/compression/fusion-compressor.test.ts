@@ -3,8 +3,10 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { FusionCompressor } from '../../src/compression/fusion-compressor.js';
+import { FusionCompressor, createProjectFusionCompressor } from '../../src/compression/fusion-compressor.js';
 import { CcrStore } from '../../src/compression/ccr-store.js';
+import { CompressionFeedbackLoop } from '../../src/compression/feedback-loop.js';
+import { estimateTokens } from '../../src/compression/compression-strategy.js';
 import type { FusionNode } from '../../src/fusion/query-engine.js';
 
 function makeFusionNode(overrides: Partial<FusionNode> = {}): FusionNode {
@@ -108,6 +110,23 @@ describe('FusionCompressor', () => {
     expect(result.compressedCandidates[0]?.content).toBe(largeContent);
   });
 
+  test('aggressive strategy compresses more than auto and conservative preserves more context', async () => {
+    const largeContent = `export function strategySensitive() {\n${'  process(data);\n'.repeat(120)}}`;
+    const nodes = [makeFusionNode({ content: largeContent, nodeId: 'strategy-node' })];
+
+    const autoResult = await compressor.compress(nodes, { maxTokens: 40, strategy: 'auto' });
+    const aggressiveResult = await compressor.compress(nodes, { maxTokens: 40, strategy: 'aggressive' });
+    const conservativeResult = await compressor.compress(nodes, { maxTokens: 40, strategy: 'conservative' });
+
+    const autoTokens = estimateTokens(autoResult.compressedCandidates[0]?.content ?? '');
+    const aggressiveTokens = estimateTokens(aggressiveResult.compressedCandidates[0]?.content ?? '');
+    const conservativeTokens = estimateTokens(conservativeResult.compressedCandidates[0]?.content ?? '');
+
+    expect(aggressiveTokens).toBeLessThan(autoTokens);
+    expect(conservativeTokens).toBeGreaterThanOrEqual(autoTokens);
+    expect(aggressiveTokens).toBeLessThan(conservativeTokens);
+  });
+
   test('compressed candidates include compression-info annotation', async () => {
     const largeContent = `export function processData() {\n${'  const step = compute();\n'.repeat(200)}}`;
     const nodes = [makeFusionNode({ content: largeContent, nodeId: 'annotated' })];
@@ -143,5 +162,18 @@ describe('FusionCompressor', () => {
     const created = FusionCompressor.createFromProject(tempDir);
     const stats = created.getStats();
     expect(stats.totalCompressions).toBe(0);
+  });
+
+  test('createFromProject records compression feedback into the project store', async () => {
+    const created = createProjectFusionCompressor(tempDir);
+    const largeContent = `function tracked() {\n${'  process(data);\n'.repeat(120)}}`;
+
+    const result = await created.compress([makeFusionNode({ content: largeContent, nodeId: 'feedback-node' })], { maxTokens: 20 });
+    expect(result.ccrHashes.size).toBeGreaterThan(0);
+
+    const feedbackLoop = CompressionFeedbackLoop.createFromProject(tempDir);
+    const summary = feedbackLoop.summarize();
+    expect(summary.totalCompressions).toBeGreaterThan(0);
+    expect(summary.bySource.graph?.compressed).toBeGreaterThan(0);
   });
 });
