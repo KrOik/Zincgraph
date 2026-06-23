@@ -1,10 +1,15 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 import { createZincgraphMcpServer } from '../../src/mcp/unified-server.js';
 import { ZINCGRAPH_TOOL_NAMES, createZincgraphToolRegistry, listZincgraphTools } from '../../src/mcp/tool-registry.js';
+import { CompressionFeedbackLoop } from '../../src/compression/feedback-loop.js';
+import * as fusionCompressorModule from '../../src/compression/fusion-compressor.js';
 import type { GraphReviewCommandResult } from '../../src/behavior/review-command.js';
-import type { ContextCapsule } from '../../src/fusion/query-engine.js';
+import { TopoSemanticQueryEngine, type ContextCapsule } from '../../src/fusion/query-engine.js';
 
 function resultText(result: CallToolResult): string {
   return result.content.filter((item) => item.type === 'text').map((item) => item.text).join('\n');
@@ -80,9 +85,14 @@ describe('Phase 4 unified MCP registry/server', () => {
   });
 
   test('delegates graph-enhanced review command', async () => {
-    const registry = createZincgraphToolRegistry({ runGraphReview: async (project) => graphReview(project) });
-    const result = await registry.callTool('zincgraph_review', { project: '/repo', diff: true });
-    expect(resultText(result)).toContain('PONYTAIL');
+    const tempDir = mkdtempSync(join(tmpdir(), 'zincgraph-mcp-review-'));
+    try {
+      const registry = createZincgraphToolRegistry({ runGraphReview: async (project) => graphReview(project) });
+      const result = await registry.callTool('zincgraph_review', { project: tempDir, diff: true });
+      expect(resultText(result)).toContain('PONYTAIL');
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   test('delegates fusion semantic search', async () => {
@@ -91,6 +101,88 @@ describe('Phase 4 unified MCP registry/server', () => {
     });
     const result = await registry.callTool('zincgraph_semantic_search', { project: '/repo', query: 'token validation', topk: 2 });
     expect(JSON.parse(resultText(result))).toMatchObject({ query: 'token validation' });
+  });
+
+  test('delegates fusion semantic search with a project-scoped compressor by default', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'zincgraph-mcp-default-'));
+    const createSpy = vi.spyOn(fusionCompressorModule, 'createProjectFusionCompressor');
+    const searchSpy = vi.spyOn(TopoSemanticQueryEngine.prototype, 'search').mockResolvedValue(capsule('token validation'));
+
+    try {
+      const registry = createZincgraphToolRegistry();
+      const result = await registry.callTool('zincgraph_semantic_search', { project: tempDir, query: 'token validation', topk: 2 });
+      expect(JSON.parse(resultText(result))).toMatchObject({ query: 'token validation' });
+      expect(createSpy).toHaveBeenCalledWith(tempDir);
+      expect(searchSpy).toHaveBeenCalled();
+    } finally {
+      createSpy.mockRestore();
+      searchSpy.mockRestore();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test('does not fall back to cwd when feedback policy init fails', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'zincgraph-mcp-policy-'));
+    const compressor = {
+      compress: async () => ({
+        compressedCandidates: [],
+        ccrHashes: new Map<string, string>(),
+        tokensSaved: 0,
+        compressionRatio: 0
+      }),
+      retrieve: async () => null,
+      getStats: () => ({
+        totalCompressions: 0,
+        totalTokensBefore: 0,
+        totalTokensAfter: 0,
+        totalTokensSaved: 0,
+        averageCompressionRatio: 0,
+        retrievalCount: 0
+      })
+    } as const;
+    const createSpy = vi.spyOn(fusionCompressorModule, 'createProjectFusionCompressor').mockReturnValue(compressor as never);
+    const policyCalls: string[] = [];
+    const policySpy = vi.spyOn(CompressionFeedbackLoop, 'createFromProject').mockImplementation((projectPath: string) => {
+      policyCalls.push(projectPath);
+      throw new Error('policy init failed');
+    });
+    const searchSpy = vi.spyOn(TopoSemanticQueryEngine.prototype, 'search').mockResolvedValue(capsule('token validation'));
+
+    try {
+      const registry = createZincgraphToolRegistry();
+      const result = await registry.callTool('zincgraph_semantic_search', { project: tempDir, query: 'token validation', topk: 2 });
+      expect(result.isError).toBeUndefined();
+      expect(policyCalls).toEqual([tempDir]);
+      expect(createSpy).toHaveBeenCalledWith(tempDir);
+      expect(searchSpy).toHaveBeenCalled();
+    } finally {
+      createSpy.mockRestore();
+      policySpy.mockRestore();
+      searchSpy.mockRestore();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test('semantic search still succeeds when feedback-loop creation fails inside the default compressor', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'zincgraph-mcp-feedback-'));
+    const policyCalls: string[] = [];
+    const policySpy = vi.spyOn(CompressionFeedbackLoop, 'createFromProject').mockImplementation((projectPath: string) => {
+      policyCalls.push(projectPath);
+      throw new Error('feedback init failed');
+    });
+    const searchSpy = vi.spyOn(TopoSemanticQueryEngine.prototype, 'search').mockResolvedValue(capsule('token validation'));
+
+    try {
+      const registry = createZincgraphToolRegistry();
+      const result = await registry.callTool('zincgraph_semantic_search', { project: tempDir, query: 'token validation', topk: 2 });
+      expect(result.isError).toBeUndefined();
+      expect(policyCalls).toContain(tempDir);
+      expect(searchSpy).toHaveBeenCalled();
+    } finally {
+      policySpy.mockRestore();
+      searchSpy.mockRestore();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   test('delegates semantic dedup check', async () => {

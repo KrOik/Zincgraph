@@ -12,9 +12,17 @@ import {
   type GraphReviewCommandResult
 } from '../behavior/review-command.js';
 import { runDedupCommand as defaultRunDedupCommand, type DedupCommandResult } from '../behavior/dedup-command.js';
+import { CcrStore } from '../compression/ccr-store.js';
+import { createProjectFusionCompressor } from '../compression/fusion-compressor.js';
 import { TopoSemanticQueryEngine, type ContextCapsule } from '../fusion/query-engine.js';
 import type { CompressionStats } from '../compression/fusion-compressor.js';
 import { compressContentLocal } from '../bridge/headroomAdapter.js';
+import { CompressionFeedbackLoop, recordRetrievalFeedback } from '../compression/feedback-loop.js';
+import { FeedbackStore } from '../compression/feedback-store.js';
+import { createFeedbackAwarePolicy, type DynamicFusionPolicy } from '../compression/ranking-adjuster.js';
+
+const feedbackStoreCache = new Map<string, FeedbackStore>();
+const ccrStoreCache = new Map<string, CcrStore>();
 
 export type ZincgraphToolSource = 'codegraph' | 'ponytail' | 'fusion';
 export type ToolArguments = Record<string, unknown>;
@@ -27,16 +35,25 @@ export interface ZincgraphToolRegistryDependencies {
   runCodeGraphCli?: (args: string[], cwd?: string) => CodeGraphCliResult;
   buildPonytailInstructions?: (mode?: PonytailMode) => Promise<string>;
   runGraphReview?: (projectPath: string, options?: GraphReviewCommandOptions) => Promise<GraphReviewCommandResult> | GraphReviewCommandResult;
-  createFusionEngine?: (projectPath: string) => Pick<TopoSemanticQueryEngine, 'query' | 'search'>;
+  createFusionEngine?: (projectPath: string) => FusionEngineLike;
   runDedup?: (options: { projectPath?: string; describe: string; threshold?: number; topk?: number }) => Promise<DedupCommandResult> | DedupCommandResult;
   compressContent?: (content: string, contentType: string, maxTokens: number) => Promise<{ compressed: string; tokensBefore: number; tokensAfter: number; hash: string }>;
   retrieveContent?: (hash: string, query?: string) => Promise<string | null>;
   getCompressionStats?: () => CompressionStats;
+  feedbackLoop?: CompressionFeedbackLoop;
+  feedbackStore?: FeedbackStore;
+  projectPathResolver?: () => string;
 }
 
 export interface ZincgraphToolRegistry {
   tools: ZincgraphToolDefinition[];
   callTool(name: string, args?: ToolArguments): Promise<CallToolResult>;
+}
+
+export interface FusionEngineLike {
+  query(query: string, options?: { topk?: number; maxTokens?: number }): Promise<ContextCapsule>;
+  search(query: string, options?: { topk?: number; maxTokens?: number }): Promise<ContextCapsule>;
+  setDynamicPolicy?(policy: DynamicFusionPolicy | undefined): void;
 }
 
 const PROJECT_PROPERTY = { type: 'string', description: 'Project path. Defaults to the current working directory.' } as const;
@@ -147,13 +164,17 @@ export function listZincgraphTools(): ZincgraphToolDefinition[] {
     fusionTool('zincgraph_compress', 'Compress content to reduce token usage. Returns compressed content with a retrieval hash.', {
       content: { type: 'string', description: 'Content to compress.' },
       content_type: { type: 'string', enum: ['code', 'json', 'text', 'auto'], description: 'Content type for strategy selection (default: auto).' },
-      max_tokens: { type: 'number', description: 'Target token budget (default: 2000).' }
+      max_tokens: { type: 'number', description: 'Target token budget (default: 2000).' },
+      project: PROJECT_PROPERTY
     }, ['content']),
     fusionTool('zincgraph_retrieve', 'Retrieve original uncompressed content by hash.', {
       hash: { type: 'string', description: 'CCR hash from a previous compress operation.' },
-      query: { type: 'string', description: 'Optional search query for BM25-based retrieval.' }
+      query: { type: 'string', description: 'Optional search query for BM25-based retrieval.' },
+      project: PROJECT_PROPERTY
     }),
-    fusionTool('zincgraph_compression_stats', 'Get compression statistics for the current session.', {})
+    fusionTool('zincgraph_compression_stats', 'Get compression statistics for the current session.', {
+      project: PROJECT_PROPERTY
+    })
   ];
 }
 
@@ -164,100 +185,172 @@ export function createZincgraphToolRegistry(
   const buildPonytailInstructions = dependencies.buildPonytailInstructions ?? defaultBuildPonytailInstructions;
   const runGraphReview = dependencies.runGraphReview ?? defaultRunGraphReviewCommand;
   const runDedup = dependencies.runDedup ?? defaultRunDedupCommand;
-  const createFusionEngine = dependencies.createFusionEngine ?? ((projectPath: string) => new TopoSemanticQueryEngine(projectPath));
+  const createFusionEngine = dependencies.createFusionEngine ?? ((projectPath: string) =>
+    createFeedbackAwareQueryEngine(projectPath));
+  const hasCustomFusionEngine = dependencies.createFusionEngine !== undefined;
   const tools = listZincgraphTools();
   const toolNames = new Set<string>(tools.map((tool) => tool.name));
+
+  async function dispatchTool(name: string, args: ToolArguments = {}): Promise<CallToolResult> {
+    if (!toolNames.has(name)) {
+      return textResult(`Unknown Zincgraph tool: ${name}`, true);
+    }
+
+    const projectPath = projectArg(args);
+
+    try {
+      switch (name as ZincgraphToolName) {
+        case 'zincgraph_explore':
+          return cliResult(runCodeGraphCli(codeGraphExploreArgs(args)));
+        case 'zincgraph_search':
+          return cliResult(runCodeGraphCli(codeGraphSearchArgs(args)));
+        case 'zincgraph_node':
+          return cliResult(runCodeGraphCli(codeGraphNodeArgs(args)));
+        case 'zincgraph_callers':
+          return cliResult(runCodeGraphCli(symbolArgs('callers', args)));
+        case 'zincgraph_callees':
+          return cliResult(runCodeGraphCli(symbolArgs('callees', args)));
+        case 'zincgraph_impact':
+          return cliResult(runCodeGraphCli(impactArgs(args)));
+        case 'zincgraph_affected':
+          return cliResult(runCodeGraphCli(affectedArgs(args)));
+        case 'zincgraph_status':
+          return cliResult(runCodeGraphCli(statusArgs(args)));
+        case 'zincgraph_ponytail_instructions': {
+          const mode = optionalString(args.mode) as PonytailMode | undefined;
+          return textResult(await buildPonytailInstructions(mode ?? 'full'));
+        }
+        case 'zincgraph_review':
+          return graphReviewResult(
+            await runGraphReview(projectPath, reviewOptions(args, true, resolveFeedbackLoop(dependencies, projectPath)))
+          );
+        case 'zincgraph_audit':
+          return graphReviewResult(
+            await runGraphReview(projectPath, reviewOptions(args, false, resolveFeedbackLoop(dependencies, projectPath)))
+          );
+        case 'zincgraph_debt':
+          return graphReviewResult(
+            await runGraphReview(projectPath, reviewOptions(args, false, resolveFeedbackLoop(dependencies, projectPath))),
+            'Zincgraph technical debt audit'
+          );
+        case 'zincgraph_semantic_search': {
+          const engine = createFusionEngine(projectPath);
+          if (hasCustomFusionEngine) {
+            applyFeedbackAwarePolicy(engine, projectPath);
+          }
+          const result = await engine.search(requiredString(args, 'query'), fusionOptions(args));
+          return jsonResult(result);
+        }
+        case 'zincgraph_dedup_check': {
+          const dedupOptions: { projectPath?: string; describe: string; threshold?: number; topk?: number } = {
+            projectPath: projectArg(args),
+            describe: requiredString(args, 'describe')
+          };
+          const threshold = optionalNumber(args.threshold);
+          const topk = optionalNumber(args.topk);
+          if (threshold !== undefined) {
+            dedupOptions.threshold = threshold;
+          }
+          if (topk !== undefined) {
+            dedupOptions.topk = topk;
+          }
+          const result = await runDedup(dedupOptions);
+          return textResult(result.output);
+        }
+        case 'zincgraph_compress': {
+          const content = requiredString(args, 'content');
+          const contentType = optionalString(args.content_type) ?? 'auto';
+          const maxTokens = optionalNumber(args.max_tokens) ?? 2000;
+          const compressFn = dependencies.compressContent ?? ((c: string, ct: string, mt: number) => compressContentLocal(c, ct as 'code' | 'json' | 'text' | 'auto', mt));
+          const compressionResult = await compressFn(content, contentType, maxTokens);
+          ccrStoreForProject(projectPath).put(
+            compressionResult.hash,
+            content,
+            normalizeCcrContentType(contentType, content)
+          );
+          resolveFeedbackLoop(dependencies, projectPath).recordCompression({
+            hash: compressionResult.hash,
+            nodeId: compressionResult.hash,
+            source: 'graph',
+            contentType: normalizeCcrContentType(contentType, content),
+            kind: normalizeCcrContentType(contentType, content),
+            compressedAt: Date.now()
+          });
+          return jsonResultRaw(compressionResult);
+        }
+        case 'zincgraph_retrieve': {
+          const hash = optionalString(args.hash);
+          const query = optionalString(args.query);
+          if (!hash && !query) {
+            throw new Error('Either hash or query must be provided.');
+          }
+          const retrieveProjectPath = projectPath;
+          const store = ccrStoreForProject(retrieveProjectPath);
+          let retrieved: string | null = null;
+          let matchedHash = hash ?? '';
+
+          if (hash) {
+            const entry = store.get(hash);
+            retrieved = entry?.content ?? null;
+          } else if (query) {
+            const entry = store.search(query, 1)[0];
+            if (entry) {
+              matchedHash = entry.hash;
+              retrieved = store.get(entry.hash)?.content ?? entry.content;
+            }
+          }
+
+          if (retrieved === null && dependencies.retrieveContent) {
+            retrieved = await dependencies.retrieveContent(hash ?? '', query);
+          }
+
+          if (retrieved === null) {
+            return textResult('No content found for the given hash or query.', true);
+          }
+          if (matchedHash) {
+            recordRetrievalFeedback(resolveFeedbackLoop(dependencies, retrieveProjectPath), matchedHash, query);
+          }
+          return textResult(retrieved);
+        }
+        case 'zincgraph_compression_stats': {
+          const statsFn = dependencies.getCompressionStats;
+          if (!statsFn) {
+            return textResult('Compression stats are not available. Provide a getCompressionStats dependency.', true);
+          }
+          return jsonResultRaw(statsFn());
+        }
+      }
+    } catch (error) {
+      return textResult(error instanceof Error ? error.message : String(error), true);
+    }
+  }
+
+  function normalizeToolArguments(args: ToolArguments): ToolArguments {
+    if (optionalString(args.project)) {
+      return args;
+    }
+    return {
+      ...args,
+      project: dependencies.projectPathResolver?.() ?? process.cwd()
+    };
+  }
 
   return {
     tools,
     async callTool(name: string, args: ToolArguments = {}): Promise<CallToolResult> {
-      if (!toolNames.has(name)) {
-        return textResult(`Unknown Zincgraph tool: ${name}`, true);
-      }
-
+      const startedAt = Date.now();
+      const normalizedArgs = normalizeToolArguments(args);
+      let result: CallToolResult | undefined;
+      let thrown: unknown;
       try {
-        switch (name as ZincgraphToolName) {
-          case 'zincgraph_explore':
-            return cliResult(runCodeGraphCli(codeGraphExploreArgs(args)));
-          case 'zincgraph_search':
-            return cliResult(runCodeGraphCli(codeGraphSearchArgs(args)));
-          case 'zincgraph_node':
-            return cliResult(runCodeGraphCli(codeGraphNodeArgs(args)));
-          case 'zincgraph_callers':
-            return cliResult(runCodeGraphCli(symbolArgs('callers', args)));
-          case 'zincgraph_callees':
-            return cliResult(runCodeGraphCli(symbolArgs('callees', args)));
-          case 'zincgraph_impact':
-            return cliResult(runCodeGraphCli(impactArgs(args)));
-          case 'zincgraph_affected':
-            return cliResult(runCodeGraphCli(affectedArgs(args)));
-          case 'zincgraph_status':
-            return cliResult(runCodeGraphCli(statusArgs(args)));
-          case 'zincgraph_ponytail_instructions': {
-            const mode = optionalString(args.mode) as PonytailMode | undefined;
-            return textResult(await buildPonytailInstructions(mode ?? 'full'));
-          }
-          case 'zincgraph_review':
-            return graphReviewResult(await runGraphReview(projectArg(args), reviewOptions(args, true)));
-          case 'zincgraph_audit':
-            return graphReviewResult(await runGraphReview(projectArg(args), reviewOptions(args, false)));
-          case 'zincgraph_debt':
-            return graphReviewResult(await runGraphReview(projectArg(args), reviewOptions(args, false)), 'Zincgraph technical debt audit');
-          case 'zincgraph_semantic_search': {
-            const engine = createFusionEngine(projectArg(args));
-            const result = await engine.search(requiredString(args, 'query'), fusionOptions(args));
-            return jsonResult(result);
-          }
-          case 'zincgraph_dedup_check': {
-            const dedupOptions: { projectPath?: string; describe: string; threshold?: number; topk?: number } = {
-              projectPath: projectArg(args),
-              describe: requiredString(args, 'describe')
-            };
-            const threshold = optionalNumber(args.threshold);
-            const topk = optionalNumber(args.topk);
-            if (threshold !== undefined) {
-              dedupOptions.threshold = threshold;
-            }
-            if (topk !== undefined) {
-              dedupOptions.topk = topk;
-            }
-            const result = await runDedup(dedupOptions);
-            return textResult(result.output);
-          }
-          case 'zincgraph_compress': {
-            const content = requiredString(args, 'content');
-            const contentType = optionalString(args.content_type) ?? 'auto';
-            const maxTokens = optionalNumber(args.max_tokens) ?? 2000;
-            const compressFn = dependencies.compressContent ?? ((c: string, ct: string, mt: number) => compressContentLocal(c, ct as 'code' | 'json' | 'text' | 'auto', mt));
-            const compressionResult = await compressFn(content, contentType, maxTokens);
-            return jsonResultRaw(compressionResult);
-          }
-          case 'zincgraph_retrieve': {
-            const hash = optionalString(args.hash);
-            const query = optionalString(args.query);
-            if (!hash && !query) {
-              throw new Error('Either hash or query must be provided.');
-            }
-            const retrieveFn = dependencies.retrieveContent;
-            if (!retrieveFn) {
-              return textResult('Content retrieval is not configured. Provide a retrieveContent dependency.', true);
-            }
-            const retrieved = await retrieveFn(hash ?? '', query);
-            if (retrieved === null) {
-              return textResult('No content found for the given hash or query.', true);
-            }
-            return textResult(retrieved);
-          }
-          case 'zincgraph_compression_stats': {
-            const statsFn = dependencies.getCompressionStats;
-            if (!statsFn) {
-              return textResult('Compression stats are not available. Provide a getCompressionStats dependency.', true);
-            }
-            return jsonResultRaw(statsFn());
-          }
-        }
+        result = await dispatchTool(name, normalizedArgs);
+        return result;
       } catch (error) {
-        return textResult(error instanceof Error ? error.message : String(error), true);
+        thrown = error;
+        result = textResult(error instanceof Error ? error.message : String(error), true);
+        return result;
+      } finally {
+        recordToolSessionLog(dependencies, name, normalizedArgs, result, Date.now() - startedAt, thrown);
       }
     }
   };
@@ -306,7 +399,7 @@ function baseTool(
       properties,
       ...(required.length > 0 ? { required } : {})
     },
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }
   };
 }
 
@@ -370,9 +463,9 @@ function statusArgs(args: ToolArguments): string[] {
   return cliArgs;
 }
 
-function reviewOptions(args: ToolArguments, defaultDiff: boolean): GraphReviewCommandOptions {
+function reviewOptions(args: ToolArguments, defaultDiff: boolean, feedbackLoop: CompressionFeedbackLoop): GraphReviewCommandOptions {
   const diff = typeof args.diff === 'boolean' ? args.diff : defaultDiff;
-  return { diff };
+  return { diff, compress: true, feedbackLoop };
 }
 
 function fusionOptions(args: ToolArguments): { topk?: number; maxTokens?: number } {
@@ -419,8 +512,194 @@ function textResult(text: string, isError = false): CallToolResult {
   };
 }
 
+function recordToolSessionLog(
+  dependencies: ZincgraphToolRegistryDependencies,
+  toolName: string,
+  args: ToolArguments,
+  result: CallToolResult | undefined,
+  durationMs: number,
+  thrown: unknown
+): void {
+  try {
+    const store = sessionLogStore(dependencies, args);
+    const output = toolName === 'zincgraph_retrieve' && result && !result.isError
+      ? summarizeRetrievedContentForLog(result)
+      : stringifyForLog(result);
+    store.recordSessionLog({
+      recordedAt: Date.now(),
+      toolName,
+      input: stringifyForLog(args),
+      output,
+      durationMs,
+      error: sanitizeLogText(toolError(result, thrown)),
+      queryContext: sanitizeLogText(optionalString(args.query) ?? optionalString(args.describe) ?? optionalString(args.hash) ?? '')
+    });
+  } catch {
+    // Session logging is best-effort; tool dispatch must not fail because
+    // SQLite/Python logging is unavailable or the output is unexpectedly large.
+  }
+}
+
+function sessionLogStore(dependencies: ZincgraphToolRegistryDependencies, args: ToolArguments): FeedbackStore {
+  if (dependencies.feedbackStore) {
+    return dependencies.feedbackStore;
+  }
+  if (dependencies.feedbackLoop) {
+    return dependencies.feedbackLoop.store;
+  }
+  const projectPath = optionalString(args.project) ?? dependencies.projectPathResolver?.() ?? process.cwd();
+  return feedbackStoreForProject(projectPath);
+}
+
+function toolError(result: CallToolResult | undefined, thrown: unknown): string {
+  if (thrown !== undefined) {
+    return thrown instanceof Error ? thrown.message : String(thrown);
+  }
+  if (!result?.isError) {
+    return '';
+  }
+  return callToolResultText(result);
+}
+
+function stringifyForLog(value: unknown): string {
+  if (value === undefined) {
+    return '';
+  }
+  const sanitized = sanitizeLogValue(value);
+  return sanitizeLogText(JSON.stringify(sanitized));
+}
+
+function callToolResultText(result: CallToolResult): string {
+  return result.content
+    .map((part) => ('text' in part && typeof part.text === 'string' ? part.text : JSON.stringify(part)))
+    .join('\n');
+}
+
+function summarizeRetrievedContentForLog(result: CallToolResult): string {
+  const text = callToolResultText(result);
+  return sanitizeLogText(`[retrieved content omitted; ${text.length} chars]`);
+}
+
+function sanitizeLogValue(value: unknown, depth = 0): unknown {
+  if (depth > 8) {
+    return '[truncated]';
+  }
+  if (typeof value === 'string') {
+    return sanitizeLogText(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => sanitizeLogValue(entry, depth + 1));
+  }
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const sanitized: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(record)) {
+      sanitized[key] = isSensitiveKey(key) ? '[REDACTED]' : sanitizeLogValue(entry, depth + 1);
+    }
+    return sanitized;
+  }
+  return value;
+}
+
+function isSensitiveKey(key: string): boolean {
+  return /(?:api[_-]?key|access[_-]?token|secret|password|passwd|authorization|bearer|credential)/i.test(key);
+}
+
+function sanitizeLogText(text: string): string {
+  if (!text) {
+    return '';
+  }
+
+  const structured = redactStructuredLogText(text);
+  const redacted = structured
+    .replace(/\b(Bearer\s+)[A-Za-z0-9._-]+/gi, '$1[REDACTED]')
+    .replace(/(["'`]?)(api[_-]?key|access[_-]?token|secret|password|passwd|authorization|token|credential)\1\s*[:=]\s*(['"`])([^'"`]{4,})\3/gi, '$2=[REDACTED]')
+    .replace(/(["'`]?)(api[_-]?key|access[_-]?token|secret|password|passwd|authorization|token|credential)\1\s*:\s*(['"`])([^'"`]{4,})\3/gi, '$2: [REDACTED]')
+    .replace(/(["'`]?)(api[_-]?key|access[_-]?token|secret|password|passwd|authorization|token|credential)\1\s*[:=]\s*(?!['"`])([^\s,;`"'(){}\[\]]{4,})/gi, '$2=[REDACTED]');
+
+  const maxChars = 8192;
+  if (redacted.length <= maxChars) {
+    return redacted;
+  }
+  return `${redacted.slice(0, maxChars)}…<truncated ${redacted.length - maxChars} chars>`;
+}
+
+function redactStructuredLogText(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+    return text;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    return JSON.stringify(redactStructuredLogValue(parsed));
+  } catch {
+    return text;
+  }
+}
+
+function redactStructuredLogValue(value: unknown, depth = 0): unknown {
+  if (depth > 8) {
+    return '[truncated]';
+  }
+  if (typeof value === 'string') {
+    return sanitizeLogText(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => redactStructuredLogValue(entry, depth + 1));
+  }
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const sanitized: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(record)) {
+      sanitized[key] = isSensitiveKey(key) ? '[REDACTED]' : redactStructuredLogValue(entry, depth + 1);
+    }
+    return sanitized;
+  }
+  return value;
+}
+
 function projectArg(args: ToolArguments): string {
   return optionalString(args.project) ?? process.cwd();
+}
+
+function resolveFeedbackLoop(dependencies: ZincgraphToolRegistryDependencies, projectPath: string): CompressionFeedbackLoop {
+  if (dependencies.feedbackLoop) {
+    return dependencies.feedbackLoop;
+  }
+  if (dependencies.feedbackStore) {
+    return new CompressionFeedbackLoop({ store: dependencies.feedbackStore });
+  }
+  return new CompressionFeedbackLoop({ store: feedbackStoreForProject(projectPath) });
+}
+
+function applyFeedbackAwarePolicy(engine: FusionEngineLike, projectPath: string): void {
+  try {
+    const policy = createFeedbackAwarePolicy(projectPath);
+    engine.setDynamicPolicy?.(policy);
+    return;
+  } catch {
+    console.warn(`Feedback-aware policy initialization failed for ${projectPath}; leaving dynamic policy unset.`);
+    engine.setDynamicPolicy?.(undefined);
+  }
+}
+
+function createFeedbackAwareQueryEngine(projectPath: string): TopoSemanticQueryEngine {
+  let dynamicPolicy: DynamicFusionPolicy | undefined;
+  try {
+    dynamicPolicy = createFeedbackAwarePolicy(projectPath);
+  } catch {
+    console.warn(`Feedback-aware policy initialization failed for ${projectPath}; using default fusion policy.`);
+  }
+
+  const dependencies = {
+    compressResults: createProjectFusionCompressor(projectPath),
+    ...(dynamicPolicy ? { dynamicPolicy } : {})
+  };
+
+  return new TopoSemanticQueryEngine(projectPath, {
+    dependencies
+  });
 }
 
 function requiredString(args: ToolArguments, key: string): string {
@@ -461,4 +740,50 @@ function pushBooleanFlag(args: string[], flag: string, value: unknown): void {
   if (value === true) {
     args.push(flag);
   }
+}
+
+function feedbackStoreForProject(projectPath: string): FeedbackStore {
+  const resolvedProjectPath = projectPath || process.cwd();
+  const cached = feedbackStoreCache.get(resolvedProjectPath);
+  if (cached) {
+    return cached;
+  }
+
+  const store = new FeedbackStore({ projectPath: resolvedProjectPath });
+  feedbackStoreCache.set(resolvedProjectPath, store);
+  return store;
+}
+
+function ccrStoreForProject(projectPath: string): CcrStore {
+  const resolvedProjectPath = projectPath || process.cwd();
+  const cached = ccrStoreCache.get(resolvedProjectPath);
+  if (cached) {
+    return cached;
+  }
+  const store = new CcrStore({ projectPath: resolvedProjectPath });
+  ccrStoreCache.set(resolvedProjectPath, store);
+  return store;
+}
+
+function normalizeCcrContentType(contentType: string, content: string): string {
+  if (contentType !== 'auto') {
+    return contentType;
+  }
+  return inferContentType(content);
+}
+
+function inferContentType(content: string): 'code' | 'json' | 'text' {
+  const trimmed = content.trim();
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    try {
+      JSON.parse(trimmed);
+      return 'json';
+    } catch {
+      // fall through
+    }
+  }
+  if (/\b(function|class|const|let|var|import|export|return|if|else|for|while)\b/.test(trimmed.slice(0, 200))) {
+    return 'code';
+  }
+  return 'text';
 }
