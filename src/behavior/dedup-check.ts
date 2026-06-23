@@ -83,6 +83,7 @@ export class DedupChecker {
 
 export function formatDedupResult(result: DedupCheckResult): string {
   const lines = [
+    'checkType: dedup-check',
     result.recommendation.message,
     `threshold=${result.threshold}`,
     `matches=${result.matches.length}`

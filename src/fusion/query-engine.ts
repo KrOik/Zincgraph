@@ -1,4 +1,5 @@
 import { resolve } from 'node:path';
+import { performance } from 'node:perf_hooks';
 
 import { FusionStore, type StoredVectorDocument } from '../freshness/fusion-store.js';
 import { type FreshnessSnapshot, getFreshnessSnapshot } from '../freshness/freshness-gate.js';
@@ -44,6 +45,7 @@ export interface FusionNode {
   sources: FusionSource[];
   sourceScores: Partial<Record<FusionSource, number>>;
   content: string;
+  fileSymbols?: string[];
   freshnessState?: string;
   warnings?: string[];
   annotations?: BehaviorAnnotation[];
@@ -73,6 +75,19 @@ export interface ContextCapsule {
   policy: FusionPolicy;
   warnings: string[];
   context: ContextBudgetResult;
+  diagnostics?: FusionQueryDiagnostics;
+}
+
+export interface FusionQueryDiagnostics {
+  timingsMs: Record<string, number>;
+  candidateCounts: {
+    graph: number;
+    vector: number;
+    text: number;
+    merged: number;
+    output: number;
+  };
+  fullJsonBytes: number;
 }
 
 export interface FusionQueryOptions {
@@ -164,6 +179,30 @@ export const FUSION_RANKING_POLICY = {
 
 const DEFAULT_TOPK = 10;
 const DEFAULT_MAX_TOKENS = 8_000;
+const EXACT_SYMBOL_MATCH_BONUS = 2.5;
+const EXACT_SYMBOL_OUTSIDE_FILE_MULTIPLIER = 0.55;
+
+function measureStage<T>(timingsMs: Record<string, number>, name: string, fn: () => T): T {
+  const start = performance.now();
+  try {
+    return fn();
+  } finally {
+    timingsMs[name] = roundTiming(performance.now() - start);
+  }
+}
+
+async function measureStageAsync<T>(timingsMs: Record<string, number>, name: string, fn: () => Promise<T>): Promise<T> {
+  const start = performance.now();
+  try {
+    return await fn();
+  } finally {
+    timingsMs[name] = roundTiming(performance.now() - start);
+  }
+}
+
+function roundTiming(value: number): number {
+  return Math.round(value * 100) / 100;
+}
 
 export class TopoSemanticQueryEngine {
   private readonly projectPath: string;
@@ -191,42 +230,45 @@ export class TopoSemanticQueryEngine {
   }
 
   async query(query: string, options: FusionQueryOptions = {}): Promise<ContextCapsule> {
-    const parsed = parseFusionQuery(query);
+    const timingsMs: Record<string, number> = {};
+    const parsed = measureStage(timingsMs, 'parseQuery', () => parseFusionQuery(query));
     const topk = options.topk ?? this.topk;
-    const snapshot = this.dependencies.readSnapshot(this.projectPath);
-    const storedDocuments = this.dependencies.listVectorDocuments(this.projectPath);
-    const documentByNode = mapDocumentsByNode(storedDocuments);
-    const freshness = this.dependencies.readFreshness(this.projectPath);
+    const snapshot = measureStage(timingsMs, 'snapshotRead', () => this.dependencies.readSnapshot(this.projectPath));
+    const storedDocuments = measureStage(timingsMs, 'vectorDocumentLoad', () => this.dependencies.listVectorDocuments(this.projectPath));
+    const documentByNode = measureStage(timingsMs, 'documentMap', () => mapDocumentsByNode(storedDocuments));
+    const freshness = measureStage(timingsMs, 'freshnessRead', () => this.dependencies.readFreshness(this.projectPath));
 
     const adjustments = this.dynamicPolicy?.adjustments;
-    const graphCandidates = this.graphCandidates(snapshot, parsed, documentByNode, adjustments);
-    const vectorCandidates = await this.vectorCandidates(parsed, topk * 4, documentByNode, adjustments);
-    const textCandidates = this.textCandidates(parsed, storedDocuments, adjustments);
+    const graphCandidates = measureStage(timingsMs, 'graphCandidates', () => this.graphCandidates(snapshot, parsed, documentByNode, adjustments));
+    const vectorCandidates = await measureStageAsync(timingsMs, 'vectorSearch', () => this.vectorCandidates(parsed, topk * 4, documentByNode, adjustments));
+    const textCandidates = measureStage(timingsMs, 'textCandidates', () => this.textCandidates(parsed, storedDocuments, adjustments));
 
-    const nodes = mergeCandidates(
+    const nodes = measureStage(timingsMs, 'mergeCandidates', () => mergeCandidates(
       [...graphCandidates, ...vectorCandidates, ...textCandidates],
       snapshot,
       freshness,
       parsed,
       adjustments
-    ).slice(0, topk);
+    ).slice(0, topk));
 
     const documents = nodes
       .map((node) => documentByNode.get(node.nodeId))
       .filter((document): document is VectorDocument => document !== undefined);
-    await this.attachBehaviorAnnotations(nodes, snapshot, documents, parsed);
+    await measureStageAsync(timingsMs, 'behaviorAnnotations', () => this.attachBehaviorAnnotations(nodes, snapshot, documents, parsed));
 
     let contextNodes = nodes;
     if (this.dependencies.compressResults) {
       const compressionStrategy = selectCompressionStrategy(nodes, adjustments);
-      const compressionResult = await this.dependencies.compressResults.compress(nodes, {
+      const compressionResult = await measureStageAsync(timingsMs, 'compression', () => this.dependencies.compressResults!.compress(nodes, {
         maxTokens: options.maxTokens ?? this.maxTokens,
         strategy: compressionStrategy
-      });
+      }));
       contextNodes = compressionResult.compressedCandidates;
+    } else {
+      timingsMs.compression = 0;
     }
 
-    const context = applyContextBudget(contextNodes, { maxTokens: options.maxTokens ?? this.maxTokens });
+    const context = measureStage(timingsMs, 'contextBudget', () => applyContextBudget(contextNodes, { maxTokens: options.maxTokens ?? this.maxTokens }));
     const outputNodes = this.dependencies.compressResults ? contextNodes : nodes;
     const outputDocuments = this.dependencies.compressResults ? [] : documents;
 
@@ -237,19 +279,32 @@ export class TopoSemanticQueryEngine {
       policy.relevanceMode = this.dependencies.relevanceMode ?? 'hybrid';
     }
 
-    return {
+    const capsule: ContextCapsule = {
       query,
       strippedQuery: parsed.text,
       route: parsed.route,
       filters: parsed.filters,
       nodes: outputNodes,
       documents: outputDocuments,
-      edges: edgesForNodes(snapshot, outputNodes),
+      edges: measureStage(timingsMs, 'edges', () => edgesForNodes(snapshot, outputNodes)),
       freshness,
       policy,
       warnings: freshness.warnings,
-      context
+      context,
+      diagnostics: {
+        timingsMs,
+        candidateCounts: {
+          graph: graphCandidates.length,
+          vector: vectorCandidates.length,
+          text: textCandidates.length,
+          merged: nodes.length,
+          output: outputNodes.length
+        },
+        fullJsonBytes: 0
+      }
     };
+    capsule.diagnostics!.fullJsonBytes = Buffer.byteLength(JSON.stringify(capsule));
+    return capsule;
   }
 
   async search(query: string, options: FusionQueryOptions = {}): Promise<ContextCapsule> {
@@ -616,6 +671,8 @@ function mergeCandidates(
     ...(adjustments?.fusionBoostOverrides ?? {})
   };
   const byNode = new Map<string, FusionNode>();
+  const terms = queryTerms(parsed.text, parsed.filters);
+  const symbolsByFile = buildFileSymbolsByFile(snapshot, terms);
   for (const candidate of candidates) {
     const existing = byNode.get(candidate.nodeId);
     if (existing) {
@@ -639,13 +696,21 @@ function mergeCandidates(
       score: candidate.score,
       sources: [candidate.source],
       sourceScores: { [candidate.source]: candidate.score },
-      content: candidate.content
+      content: candidate.content,
+      fileSymbols: selectFileSymbolsForNode(symbolsByFile.get(candidate.filePath) ?? [], candidate, terms)
     });
   }
 
   const nodesById = new Map(snapshot.nodes.map((node) => [node.id, node]));
   const freshnessByFile = new Map(freshness.entries.map((entry) => [entry.filePath, entry.state]));
-  const terms = queryTerms(parsed.text, parsed.filters);
+  const exactQuerySignature = parsed.route === 'graph-first' ? normalizeExactSymbol(parsed.text) : '';
+  const exactFocusFiles = exactQuerySignature
+    ? new Set(
+        [...byNode.values()]
+          .filter((node) => exactSymbolMatches(node, exactQuerySignature))
+          .map((node) => node.filePath)
+      )
+    : new Set<string>();
 
   const ranked = [...byNode.values()]
     .map((node) => {
@@ -658,6 +723,13 @@ function mergeCandidates(
       const snapshotNode = nodesById.get(node.nodeId);
       if (snapshotNode && hasCallProximity(snapshotNode, terms)) {
         score *= fusionBoosts.callProximityMultiplier;
+      }
+      if (exactQuerySignature) {
+        if (exactSymbolMatches(node, exactQuerySignature)) {
+          score += EXACT_SYMBOL_MATCH_BONUS;
+        } else if (exactFocusFiles.size > 0 && !exactFocusFiles.has(node.filePath)) {
+          score *= EXACT_SYMBOL_OUTSIDE_FILE_MULTIPLIER;
+        }
       }
       score += formulaicBroadQueryBoost(node, terms, parsed.route);
       const kindBoost = adjustments?.kindBoosts?.[node.kind];
@@ -682,6 +754,133 @@ function mergeCandidates(
     })
     .sort(compareFusionNodes);
   return diversifyBroadHybridResults(ranked, parsed);
+}
+
+function buildFileSymbolsByFile(snapshot: CodeGraphSnapshot, terms: readonly string[]): Map<string, string[]> {
+  const collected = new Map<string, string[]>();
+  const seenByFile = new Map<string, Set<string>>();
+
+  for (const snapshotNode of snapshot.nodes) {
+    const filePath = snapshotNode.filePath;
+    const symbols = collected.get(filePath) ?? [];
+    const seen = seenByFile.get(filePath) ?? new Set<string>();
+    const add = (symbol: string | undefined | null): void => {
+      const value = normalizeCandidateSymbol(symbol);
+      if (!value) {
+        return;
+      }
+      const normalized = normalizeExactSymbol(value);
+      if (!normalized || seen.has(normalized)) {
+        return;
+      }
+      seen.add(normalized);
+      symbols.push(value);
+    };
+
+    add(snapshotNode.name);
+    if (snapshotNode.qualifiedName && snapshotNode.qualifiedName !== snapshotNode.name) {
+      add(shortSymbolName(snapshotNode.qualifiedName));
+    }
+    for (const highlight of extractSalientIdentifiers([snapshotNode.signature, snapshotNode.docstring, snapshotNode.sourceSnippet].filter(Boolean).join('\n'))) {
+      add(highlight);
+    }
+
+    collected.set(filePath, symbols);
+    seenByFile.set(filePath, seen);
+  }
+
+  const ranked = new Map<string, string[]>();
+  for (const [filePath, symbols] of collected) {
+    ranked.set(filePath, symbols.sort((left, right) => compareFileSymbols(left, right, terms, filePath)));
+  }
+  return ranked;
+}
+
+function selectFileSymbolsForNode(symbols: readonly string[], candidate: CandidateDraft, terms: readonly string[]): string[] {
+  const candidateNames = new Set<string>([
+    normalizeExactSymbol(candidate.qualifiedName),
+    normalizeExactSymbol(shortSymbolName(candidate.qualifiedName)),
+    normalizeExactSymbol(candidate.filePath)
+  ]);
+  return symbols
+    .filter((symbol) => {
+      const normalized = normalizeExactSymbol(symbol);
+      return normalized.length > 0 && !candidateNames.has(normalized);
+    })
+    .slice(0, Math.max(6, Math.min(8, symbols.length)))
+    .sort((left, right) => compareFileSymbols(left, right, terms, candidate.filePath));
+}
+
+function compareFileSymbols(left: string, right: string, terms: readonly string[], filePath: string): number {
+  const scoreDelta = scoreFileSymbol(right, terms, filePath) - scoreFileSymbol(left, terms, filePath);
+  if (scoreDelta !== 0) {
+    return scoreDelta;
+  }
+  return left.localeCompare(right);
+}
+
+function scoreFileSymbol(symbol: string, terms: readonly string[], filePath: string): number {
+  const lowerSymbol = symbol.toLowerCase();
+  const normalizedSymbol = normalizeExactSymbol(symbol);
+  const pathTerms = new Set(tokenizeCodeText(filePath));
+  let score = 0;
+
+  if (!symbol) {
+    return score;
+  }
+  if (symbol.includes('_')) {
+    score += 3;
+  }
+  if (/[A-Z]/.test(symbol.slice(1))) {
+    score += 2;
+  }
+  for (const term of terms) {
+    const normalizedTerm = normalizeExactSymbol(term);
+    if (!normalizedTerm) {
+      continue;
+    }
+    if (normalizedSymbol === normalizedTerm) {
+      score += 10;
+    } else if (normalizedSymbol.includes(normalizedTerm)) {
+      score += 6;
+    } else if (lowerSymbol.includes(term.toLowerCase())) {
+      score += 3;
+    }
+  }
+  const pathOverlap = terms.filter((term) => pathTerms.has(term)).length;
+  if (pathOverlap > 0) {
+    score += Math.min(4, pathOverlap * 1.5);
+  }
+  return score;
+}
+
+function extractSalientIdentifiers(text: string): string[] {
+  if (!text.trim()) {
+    return [];
+  }
+  const identifiers = new Set<string>();
+  const patterns = [
+    /\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b/g,
+    /\b[a-z][a-z0-9]*(?:[A-Z][a-zA-Z0-9]+)+\b/g,
+    /\b[A-Z][a-zA-Z0-9]+(?:[A-Z][a-zA-Z0-9]+)+\b/g
+  ];
+  for (const pattern of patterns) {
+    for (const match of text.matchAll(pattern)) {
+      const value = match[0];
+      if (value) {
+        identifiers.add(value);
+      }
+    }
+  }
+  return [...identifiers];
+}
+
+function shortSymbolName(value: string): string {
+  return String(value ?? '').split(/::|[#.]/g).pop() ?? '';
+}
+
+function normalizeCandidateSymbol(value: string | undefined | null): string {
+  return String(value ?? '').trim();
 }
 
 function diversifyBroadHybridResults(nodes: FusionNode[], parsed: ParsedFusionQuery): FusionNode[] {
@@ -717,6 +916,15 @@ function diversifyBroadHybridResults(nodes: FusionNode[], parsed: ParsedFusionQu
     }
   }
   return selected;
+}
+
+function exactSymbolMatches(node: Pick<FusionNode, 'qualifiedName'>, exactQuerySignature: string): boolean {
+  if (!exactQuerySignature) {
+    return false;
+  }
+  return node.qualifiedName
+    .split(/::|[#.]/g)
+    .some((segment) => normalizeExactSymbol(segment) === exactQuerySignature);
 }
 
 function selectCompressionStrategy(
@@ -782,7 +990,18 @@ function formulaicBroadQueryBoost(node: FusionNode, terms: readonly string[], ro
   const pathTerms = new Set(tokenizeCodeText(`${node.filePath} ${node.qualifiedName}`));
   const evidenceOverlap = terms.filter((term) => evidenceTerms.has(term)).length / terms.length;
   const pathOverlap = terms.filter((term) => pathTerms.has(term)).length / terms.length;
-  return Math.min(1.2, evidenceOverlap * 0.35 + pathOverlap * 0.5);
+  const familyBonus = fileFamilyBonus(node.filePath, terms);
+  return Math.min(1.8, evidenceOverlap * 0.2 + pathOverlap * 1 + familyBonus);
+}
+
+function fileFamilyBonus(filePath: string, terms: readonly string[]): number {
+  const pathTerms = new Set(tokenizeCodeText(filePath));
+  const overlap = terms.filter((term) => pathTerms.has(term)).length;
+  if (overlap === 0) {
+    return 0;
+  }
+  const density = overlap / Math.max(1, terms.length);
+  return Math.min(1.2, overlap * 0.35 + density * 0.75);
 }
 
 export function compareFusionNodes(left: FusionNode, right: FusionNode): number {
@@ -807,6 +1026,10 @@ function hasCallProximity(node: CodeGraphSnapshotNode, terms: readonly string[])
   }
   const callTerms = new Set(tokenizeCodeText(node.calls.join(' ')));
   return terms.some((term) => callTerms.has(term));
+}
+
+function normalizeExactSymbol(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '');
 }
 
 function edgesForNodes(snapshot: CodeGraphSnapshot, nodes: readonly FusionNode[]): FusionEdge[] {

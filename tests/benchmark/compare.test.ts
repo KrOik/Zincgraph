@@ -108,6 +108,147 @@ describe('benchmark scorer', () => {
     expect(summary.diagnosticWinner).toBe('codegraph');
   });
 
+  test('structured scoring does not improve when the same evidence is more verbose', () => {
+    const task: any = {
+      id: 'anti-verbosity',
+      goldenFiles: ['src/auth.ts'],
+      goldenSymbols: ['validateToken'],
+      relevantTerms: ['token validation'],
+      expectedCapabilities: { 'zincgraph-fusion': ['graph-delegation', 'fusion'] }
+    };
+    const compact = JSON.stringify({
+      results: [
+        { filePath: 'src/auth.ts', qualifiedName: 'validateToken', kind: 'function', sources: ['graph', 'vector'], textBranch: 'fusion-store-token-overlap', excerpt: 'token validation' }
+      ],
+      route: 'hybrid',
+      textBranch: 'fusion-store-token-overlap'
+    });
+    const verbose = JSON.stringify({
+      results: [
+        { filePath: 'src/auth.ts', qualifiedName: 'validateToken', kind: 'function', sources: ['graph', 'vector'], textBranch: 'fusion-store-token-overlap', excerpt: `token validation ${'filler '.repeat(1000)}` }
+      ],
+      route: 'hybrid',
+      textBranch: 'fusion-store-token-overlap',
+      appendix: 'unscored verbose diagnostic material '.repeat(1000)
+    });
+    const compactScores = scoreTask(analyzeOutput({ task, arm: 'zincgraph-fusion', commandSpec: ['fixture'], status: 0, output: compact, medianLatencyMs: 1 }), task);
+    const verboseScores = scoreTask(analyzeOutput({ task, arm: 'zincgraph-fusion', commandSpec: ['fixture'], status: 0, output: verbose, medianLatencyMs: 1 }), task);
+    expect(verboseScores.retrieval).toBe(compactScores.retrieval);
+    expect(verboseScores.capability).toBe(compactScores.capability);
+  });
+
+  test('structured false positives lower retrieval versus compact precise evidence', () => {
+    const task: any = {
+      id: 'false-positive-penalty',
+      goldenFiles: ['src/auth.ts'],
+      goldenSymbols: ['validateToken'],
+      relevantTerms: ['token validation']
+    };
+    const precise = analyzeOutput({
+      task,
+      arm: 'zincgraph-fusion',
+      commandSpec: ['fixture'],
+      status: 0,
+      output: JSON.stringify({ results: [{ filePath: 'src/auth.ts', qualifiedName: 'validateToken', sources: ['graph'], excerpt: 'token validation' }] }),
+      medianLatencyMs: 1
+    });
+    const broad = analyzeOutput({
+      task,
+      arm: 'zincgraph-fusion',
+      commandSpec: ['fixture'],
+      status: 0,
+      output: JSON.stringify({
+        results: [
+          { filePath: 'src/auth.ts', qualifiedName: 'validateToken', sources: ['graph'], excerpt: 'token validation' },
+          { filePath: 'src/noise-a.ts', qualifiedName: 'noiseA', sources: ['graph'], excerpt: 'unrelated' },
+          { filePath: 'src/noise-b.ts', qualifiedName: 'noiseB', sources: ['vector'], excerpt: 'unrelated' }
+        ]
+      }),
+      medianLatencyMs: 1
+    });
+    expect(broad.falsePositiveEvidenceCount).toBe(2);
+    expect(scoreTask(broad, task).retrieval).toBeLessThan(scoreTask(precise, task).retrieval);
+  });
+
+  test('capability scoring requires output proof, not just command success', () => {
+    const task: any = {
+      id: 'capability-proof',
+      goldenFiles: [],
+      goldenSymbols: [],
+      relevantTerms: [],
+      expectedCapabilities: { 'zincgraph-fusion': ['graph-delegation', 'fusion'] }
+    };
+    const noProof = analyzeOutput({ task, arm: 'zincgraph-fusion', commandSpec: ['fixture'], status: 0, output: '{}', medianLatencyMs: 1 });
+    const proven = analyzeOutput({
+      task,
+      arm: 'zincgraph-fusion',
+      commandSpec: ['fixture'],
+      status: 0,
+      output: JSON.stringify({
+        results: [{ filePath: 'src/auth.ts', qualifiedName: 'validateToken', sources: ['graph', 'vector'], textBranch: 'fusion-store-token-overlap', excerpt: 'token validation' }],
+        route: 'hybrid',
+        textBranch: 'fusion-store-token-overlap'
+      }),
+      medianLatencyMs: 1
+    });
+    expect(scoreTask(noProof, task).capability).toBe(0);
+    expect(scoreTask(proven, task).capability).toBe(1);
+  });
+
+  test('capability scoring survives concatenated multi-command output when structured evidence stays separate', () => {
+    const task: any = {
+      id: 'multi-command-capability-proof',
+      goldenFiles: ['src/auth.ts'],
+      goldenSymbols: ['validateToken'],
+      relevantTerms: ['token validation'],
+      expectedCapabilities: { 'zincgraph-fusion': ['graph-delegation', 'fusion'] }
+    };
+    const outputParts = [
+      JSON.stringify({
+        results: [
+          {
+            filePath: 'src/auth.ts',
+            qualifiedName: 'validateToken',
+            kind: 'function',
+            sources: ['graph', 'vector'],
+            textBranch: 'fusion-store-token-overlap',
+            excerpt: 'token validation'
+          }
+        ],
+        route: 'hybrid',
+        textBranch: 'fusion-store-token-overlap'
+      }),
+      'checkType: dedup-check\nNo semantic duplicate above 85%; no reuse suggestion.'
+    ];
+    const result = analyzeOutput({ task, arm: 'zincgraph-fusion', commandSpec: ['fixture', 'fixture-2'], status: 0, output: outputParts.join('\n'), outputParts, medianLatencyMs: 1 });
+    expect(scoreTask(result, task).capability).toBe(1);
+    expect(result.falsePositiveEvidenceCount).toBeGreaterThan(0);
+  });
+
+  test('delegated status wrappers credit upstream status evidence for retrieval', () => {
+    const task = TASKS.find((entry: any) => entry.id === 'status-index-coverage');
+    expect(task).toBeDefined();
+    if (!task) {
+      throw new Error('expected status-index-coverage task');
+    }
+    const output = JSON.stringify({
+      delegated: true,
+      upstream: {
+        initialized: true,
+        fileCount: 1,
+        nodeCount: 2,
+        edgeCount: 3,
+        languages: ['typescript']
+      }
+    });
+    const result = analyzeOutput({ task, arm: 'zincgraph-fusion', commandSpec: ['fixture'], status: 0, output, medianLatencyMs: 1 });
+    const scores = scoreTask(result, task);
+    expect(result.evidenceCount).toBe(1);
+    expect(result.relevantTermHits).toBe(5);
+    expect(scores.retrieval).toBeGreaterThan(0.5);
+    expect(scores.capability).toBeGreaterThan(0.5);
+  });
+
   test('quality-only scores exclude density and runtime while preserving original totals', () => {
     const arms = {
       codegraph: {

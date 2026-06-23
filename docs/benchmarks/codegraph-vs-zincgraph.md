@@ -57,3 +57,5 @@ Current repository state roots `.codegraph` and `.zincgraph` are fingerprinted b
 The local score can prove whether the installed CodeGraph and Zincgraph surfaces behave well on this repository under deterministic metrics. It cannot prove universal agent effectiveness across large external corpora.
 
 For agent-level cost/tokens/time/correctness claims, use the optional external A/B extension in `bench/agent-eval/README.md`.
+
+For implementation-oriented follow-up and anti-gaming hardening, see [CodeGraph vs Zincgraph Next Steps](./codegraph-vs-zincgraph-next-steps.md).

@@ -78,6 +78,8 @@ async function runCli(args: string[], options: CliBuildOptions = {}): Promise<st
   let output = '';
   const originalLog = console.log;
   const originalError = console.error;
+  const originalStdoutWrite = process.stdout.write;
+  const originalStderrWrite = process.stderr.write;
   const program = buildCli({
     createFusionEngine: () => ({
       query: async (query: string) => capsule(query),
@@ -100,20 +102,98 @@ async function runCli(args: string[], options: CliBuildOptions = {}): Promise<st
   console.error = (value?: unknown) => {
     output += `${String(value)}\n`;
   };
+  process.stdout.write = ((chunk: unknown, encoding?: BufferEncoding | ((error?: Error | null) => void), callback?: (error?: Error | null) => void) => {
+    output += String(chunk);
+    if (typeof encoding === 'function') {
+      encoding();
+    } else if (callback) {
+      callback();
+    }
+    return true;
+  }) as typeof process.stdout.write;
+  process.stderr.write = ((chunk: unknown, encoding?: BufferEncoding | ((error?: Error | null) => void), callback?: (error?: Error | null) => void) => {
+    output += String(chunk);
+    if (typeof encoding === 'function') {
+      encoding();
+    } else if (callback) {
+      callback();
+    }
+    return true;
+  }) as typeof process.stderr.write;
   try {
     await program.parseAsync(['node', 'zincgraph', ...args]);
     return output;
   } finally {
     console.log = originalLog;
     console.error = originalError;
+    process.stdout.write = originalStdoutWrite;
+    process.stderr.write = originalStderrWrite;
   }
 }
 
 describe('Phase 2 CLI integration', () => {
-  test('explore command prints a JSON context capsule', async () => {
+  test('explore command prints compact JSON by default', async () => {
     const output = await runCli(['explore', 'token validation', '--topk', '2']);
+    const parsed = JSON.parse(output) as {
+      results: Array<{ sources: string[] }>;
+      route: string;
+      textBranch: string;
+      nativeFts: false | string;
+    };
+    expect(parsed.results[0]?.sources).toEqual(['graph', 'vector']);
+    expect(parsed.route).toBe('hybrid');
+    expect(parsed.textBranch).toBe('fusion-store-token-overlap');
+    expect(parsed.nativeFts).toBe(false);
+  });
+
+  test('explore --format full-json preserves the context capsule shape', async () => {
+    const output = await runCli(['explore', 'token validation', '--topk', '2', '--format', 'full-json']);
     const parsed = JSON.parse(output) as ContextCapsule;
     expect(parsed.nodes[0]?.sources).toEqual(['graph', 'vector']);
+  });
+
+  test('status --json forwards raw CodeGraph output', async () => {
+    const output = await runCli(['status', '.', '--json'], {
+      runCodeGraphCli: () => ({
+        command: 'codegraph',
+        args: ['status', '.', '--json'],
+        status: 0,
+        stdout: JSON.stringify({
+          initialized: true,
+          fileCount: 1,
+          nodeCount: 2,
+          edgeCount: 3,
+          languages: ['typescript']
+        }),
+        stderr: ''
+      })
+    });
+    const parsed = JSON.parse(output) as { delegated?: boolean; initialized: boolean; fileCount: number };
+    expect(parsed.delegated).toBeUndefined();
+    expect(parsed.initialized).toBe(true);
+    expect(parsed.fileCount).toBe(1);
+  });
+
+  test('status --delegated-json wraps CodeGraph output with Zincgraph metadata', async () => {
+    const output = await runCli(['status', '.', '--json', '--delegated-json'], {
+      runCodeGraphCli: () => ({
+        command: 'codegraph',
+        args: ['status', '.', '--json'],
+        status: 0,
+        stdout: JSON.stringify({
+          initialized: true,
+          fileCount: 1,
+          nodeCount: 2,
+          edgeCount: 3,
+          languages: ['typescript']
+        }),
+        stderr: ''
+      })
+    });
+    const parsed = JSON.parse(output) as { delegated: boolean; upstream: { initialized: boolean; fileCount: number } };
+    expect(parsed.delegated).toBe(true);
+    expect(parsed.upstream.initialized).toBe(true);
+    expect(parsed.upstream.fileCount).toBe(1);
   });
 
   test('search command supports fielded query syntax', async () => {

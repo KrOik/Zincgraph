@@ -50,6 +50,8 @@ interface FusionEngineLike {
   setDynamicPolicy?(policy: DynamicFusionPolicy | undefined): void;
 }
 
+type FusionOutputFormat = 'compact-json' | 'full-json' | 'text';
+
 import { startZincgraphMcpServer } from './mcp/unified-server.js';
 import { installZincgraph, type AgentName, type UnifiedInstallResult } from './installer/unified-installer.js';
 
@@ -105,15 +107,18 @@ export function buildCli(cliOptions: CliBuildOptions = {}): Command {
   program
     .command('status')
     .argument('[project]', 'project path', process.cwd())
-    .option('--json', 'forward JSON output from CodeGraph')
+    .option('--json', 'forward raw JSON output from CodeGraph')
+    .option('--delegated-json', 'wrap delegated CodeGraph JSON with Zincgraph metadata')
     .description('Delegate project status to CodeGraph')
-    .action((project: string, options: { json?: boolean }) => {
+    .action((project: string, options: { json?: boolean; delegatedJson?: boolean }) => {
       const args = ['status', project];
-      if (options.json) {
+      if (options.json || options.delegatedJson) {
         args.push('--json');
       }
       const result = runCodeGraph(cliOptions)(args);
-      if (result.stdout) {
+      if (options.delegatedJson) {
+        writeDelegatedStatusOutput(result.stdout);
+      } else if (result.stdout) {
         process.stdout.write(result.stdout);
       }
       if (result.stderr) {
@@ -290,10 +295,11 @@ export function buildCli(cliOptions: CliBuildOptions = {}): Command {
     .option('-p, --project <project>', 'project path', process.cwd())
     .option('--topk <number>', 'maximum result count', parsePositiveInteger, 10)
     .option('--max-tokens <number>', 'context token budget', parsePositiveInteger, 8000)
+    .option('--format <format>', 'output format: compact-json | full-json | text', parseFusionOutputFormat, 'compact-json')
     .description('Run Zincgraph fusion explore (graph + vector + lexical text + freshness)')
-    .action(async (queryParts: string[], options: { project: string; topk: number; maxTokens: number }) => {
+    .action(async (queryParts: string[], options: { project: string; topk: number; maxTokens: number; format: FusionOutputFormat }) => {
       const capsule = await runFusionQuery('query', queryParts.join(' '), options.project, fusionCliOptions(options, cliOptions));
-      console.log(JSON.stringify(capsule, null, 2));
+      writeFusionOutput(capsule, options.format);
     });
 
   program
@@ -305,8 +311,9 @@ export function buildCli(cliOptions: CliBuildOptions = {}): Command {
     .option('--codegraph', 'delegate to upstream CodeGraph query instead of Zincgraph fusion search')
     .option('--kind <kind>', 'CodeGraph symbol kind filter when --codegraph is used')
     .option('--json', 'request JSON output when --codegraph is used')
+    .option('--format <format>', 'output format for Zincgraph fusion search: compact-json | full-json | text', parseFusionOutputFormat, 'compact-json')
     .description('Run Zincgraph fusion search by default; use --codegraph for upstream CodeGraph query')
-    .action(async (queryParts: string[], options: { project: string; topk: number; maxTokens: number; codegraph?: boolean; kind?: string; json?: boolean }) => {
+    .action(async (queryParts: string[], options: { project: string; topk: number; maxTokens: number; codegraph?: boolean; kind?: string; json?: boolean; format: FusionOutputFormat }) => {
       const query = queryParts.join(' ');
       if (options.codegraph) {
         const args = ['query', query, '-p', options.project, '--limit', String(options.topk)];
@@ -320,7 +327,7 @@ export function buildCli(cliOptions: CliBuildOptions = {}): Command {
         return;
       }
       const capsule = await runFusionQuery('search', query, options.project, fusionCliOptions(options, cliOptions));
-      console.log(JSON.stringify(capsule, null, 2));
+      writeFusionOutput(capsule, options.format);
     });
 
   program
@@ -576,6 +583,124 @@ function fusionCliOptions(
 ): { topk: number; maxTokens: number; createFusionEngine?: (projectPath: string) => FusionEngineLike } {
   const base = { topk: options.topk, maxTokens: options.maxTokens };
   return cliOptions.createFusionEngine ? { ...base, createFusionEngine: cliOptions.createFusionEngine } : base;
+}
+
+function writeFusionOutput(capsule: ContextCapsule, format: FusionOutputFormat): void {
+  if (format === 'full-json') {
+    console.log(JSON.stringify(capsule, null, 2));
+    return;
+  }
+  if (format === 'text') {
+    console.log(formatFusionText(capsule));
+    return;
+  }
+  console.log(JSON.stringify(compactFusionResult(capsule), null, 2));
+}
+
+function compactFusionResult(capsule: ContextCapsule): Record<string, unknown> {
+  return {
+    query: capsule.query,
+    strippedQuery: capsule.strippedQuery,
+    route: capsule.route,
+    filters: capsule.filters,
+    textBranch: capsule.policy.textBranch,
+    nativeFts: capsule.policy.nativeFts,
+    results: capsule.nodes.map((node, index) => ({
+      rank: index + 1,
+      nodeId: node.nodeId,
+      filePath: node.filePath,
+      language: node.language,
+      kind: node.kind,
+      qualifiedName: node.qualifiedName,
+      score: roundNumber(node.score),
+      sources: node.sources,
+      sourceScores: node.sourceScores,
+      fileSymbols: node.fileSymbols,
+      freshnessState: node.freshnessState,
+      warnings: node.warnings,
+      annotations: node.annotations,
+      signalText: node.fileSymbols?.length ? `related symbols: ${node.fileSymbols.join(' ')}` : undefined,
+      excerpt: node.fileSymbols?.length
+        ? [
+            `related symbols: ${node.fileSymbols.join(' ')}`,
+            compactExcerpt(node.content)
+          ].filter(Boolean).join('\n')
+        : compactExcerpt(node.content)
+    })),
+    freshness: {
+      fresh: capsule.freshness.fresh,
+      pending: capsule.freshness.pending,
+      stale: capsule.freshness.stale,
+      failed: capsule.freshness.failed,
+      total: capsule.freshness.total,
+      isFresh: capsule.freshness.isFresh,
+      warnings: capsule.freshness.warnings
+    },
+    context: {
+      maxTokens: capsule.context.maxTokens,
+      usedTokens: capsule.context.usedTokens,
+      truncated: capsule.context.truncated,
+      includedNodeIds: capsule.context.includedNodeIds,
+      droppedNodeIds: capsule.context.droppedNodeIds
+    },
+    diagnostics: capsule.diagnostics
+  };
+}
+
+function formatFusionText(capsule: ContextCapsule): string {
+  const lines = [
+    `query: ${capsule.query}`,
+    `route: ${capsule.route}`,
+    `freshness: ${capsule.freshness.fresh} fresh, ${capsule.freshness.pending} pending, ${capsule.freshness.stale} stale`
+  ];
+  for (const [index, node] of capsule.nodes.entries()) {
+    lines.push(`${index + 1}. ${node.qualifiedName} (${node.kind}) ${node.filePath} score=${roundNumber(node.score)} sources=${node.sources.join(',')}`);
+  }
+  return lines.join('\n');
+}
+
+function compactExcerpt(content: string): string {
+  const normalized = content.replace(/\s+/g, ' ').trim();
+  return normalized.length > 240 ? `${normalized.slice(0, 237)}...` : normalized;
+}
+
+function roundNumber(value: number): number {
+  return Math.round(value * 10000) / 10000;
+}
+
+function parseFusionOutputFormat(value: string): FusionOutputFormat {
+  if (value === 'compact-json' || value === 'full-json' || value === 'text') {
+    return value;
+  }
+  throw new Error(`Unsupported fusion output format: ${value}. Use compact-json, full-json, or text.`);
+}
+
+function writeDelegatedStatusOutput(stdout: string | undefined): void {
+  if (!stdout) {
+    return;
+  }
+  const parsed = tryParseJsonObject(stdout);
+  if (parsed) {
+    const delegated = {
+      delegated: true,
+      upstream: parsed
+    };
+    console.log(JSON.stringify(delegated, null, 2));
+    return;
+  }
+  console.log(stdout.trimEnd());
+}
+
+function tryParseJsonObject(value: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 function parsePositiveInteger(value: string): number {

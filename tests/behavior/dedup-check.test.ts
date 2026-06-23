@@ -49,6 +49,7 @@ describe('Phase 3 semantic dedup checker', () => {
       checker: checker([candidates[0]!, candidates[2]!])
     });
     expect(command.output).toContain('Semantic duplicate found');
+    expect(command.output).toContain('checkType: dedup-check');
     expect(formatDedupResult(command.result)).toContain('matches=1');
   });
 

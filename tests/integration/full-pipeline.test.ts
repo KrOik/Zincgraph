@@ -72,10 +72,10 @@ describe('Phase 4 full pipeline integration', () => {
       readGraphSnapshot: (path) => snapshot(path)
     };
     await runCli(['init', project], options);
-    const explore = JSON.parse(await runCli(['explore', 'token validation', '-p', project], options)) as ContextCapsule;
+    const explore = JSON.parse(await runCli(['explore', 'token validation', '-p', project], options)) as { results: Array<{ qualifiedName: string }> };
     const review = await runCli(['review', project], options);
     expect(delegated[0]).toEqual(['init', project]);
-    expect(explore.nodes[0]?.qualifiedName).toBe('validateToken');
+    expect(explore.results[0]?.qualifiedName).toBe('validateToken');
     expect(review).toContain('PONYTAIL');
   });
 
