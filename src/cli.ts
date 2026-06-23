@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 
 import { Command } from 'commander';
 
@@ -20,8 +21,12 @@ import type { CodeGraphSnapshot } from './vector/code-to-vectors.js';
 import { runDedupCommand, type DedupCommandResult } from './behavior/dedup-command.js';
 import { runAutoSyncOnce as defaultRunAutoSyncOnce } from './freshness/auto-sync.js';
 import { probeHeadroom } from './bridge/headroomAdapter.js';
-import { FusionCompressor } from './compression/fusion-compressor.js';
+import { FusionCompressor, createProjectFusionCompressor } from './compression/fusion-compressor.js';
 import { CcrStore } from './compression/ccr-store.js';
+import { CompressionFeedbackLoop, recordRetrievalFeedback } from './compression/feedback-loop.js';
+import { FeedbackStore, type SessionLog } from './compression/feedback-store.js';
+import { createLearnIntegrationAdapter, type RuleFormat } from './compression/learn-integration.js';
+import { createFeedbackAwarePolicy, type DynamicFusionPolicy } from './compression/ranking-adjuster.js';
 import { FusionStore } from './freshness/fusion-store.js';
 
 const CODEGRAPH_DELEGATED_COMMANDS = [
@@ -39,6 +44,12 @@ const CODEGRAPH_DELEGATED_COMMANDS = [
 
 type CodeGraphRunner = typeof defaultRunCodeGraphCli;
 
+interface FusionEngineLike {
+  query(query: string, options?: { topk?: number; maxTokens?: number }): Promise<ContextCapsule>;
+  search(query: string, options?: { topk?: number; maxTokens?: number }): Promise<ContextCapsule>;
+  setDynamicPolicy?(policy: DynamicFusionPolicy | undefined): void;
+}
+
 import { startZincgraphMcpServer } from './mcp/unified-server.js';
 import { installZincgraph, type AgentName, type UnifiedInstallResult } from './installer/unified-installer.js';
 
@@ -54,7 +65,7 @@ function readVersion(): string {
 }
 
 export interface CliBuildOptions {
-  createFusionEngine?: (projectPath: string) => Pick<TopoSemanticQueryEngine, 'query' | 'search'>;
+  createFusionEngine?: (projectPath: string) => FusionEngineLike;
   createFreshnessGate?: (projectPath: string) => Pick<FreshnessGate, 'ensureReady'>;
   syncProject?: (projectPath: string) => Promise<unknown> | unknown;
   runPonytailReview?: typeof defaultRunPonytailReview;
@@ -176,7 +187,13 @@ export function buildCli(cliOptions: CliBuildOptions = {}): Command {
       const review = cliOptions.runPonytailReview ?? defaultRunPonytailReview;
       const diff = options.diff ?? false;
       const delegation = review(project, { diff });
-      const graphOptions: GraphReviewCommandOptions = { diff, ponytail: delegation, runPonytail: review };
+      const graphOptions: GraphReviewCommandOptions = {
+        diff,
+        ponytail: delegation,
+        runPonytail: review,
+        compress: true,
+        feedbackLoop: createProjectFeedbackLoop(project)
+      };
       if (cliOptions.readGraphSnapshot) {
         graphOptions.readSnapshot = cliOptions.readGraphSnapshot;
       }
@@ -206,7 +223,13 @@ export function buildCli(cliOptions: CliBuildOptions = {}): Command {
       }
       const review = cliOptions.runPonytailReview ?? defaultRunPonytailReview;
       const delegation = review(project, { diff: false });
-      const graphOptions: GraphReviewCommandOptions = { diff: false, ponytail: delegation, runPonytail: review };
+      const graphOptions: GraphReviewCommandOptions = {
+        diff: false,
+        ponytail: delegation,
+        runPonytail: review,
+        compress: true,
+        feedbackLoop: createProjectFeedbackLoop(project)
+      };
       if (cliOptions.readGraphSnapshot) {
         graphOptions.readSnapshot = cliOptions.readGraphSnapshot;
       }
@@ -366,11 +389,36 @@ export function buildCli(cliOptions: CliBuildOptions = {}): Command {
       const store = new CcrStore({ projectPath: project });
       const entry = store.get(hash);
       if (entry) {
+        recordRetrievalFeedback(createProjectFeedbackLoop(project), hash);
         console.log(JSON.stringify(entry, null, 2));
       } else {
         console.error(`No CCR entry found for hash: ${hash}`);
         process.exitCode = 1;
       }
+    });
+
+  program
+    .command('learn')
+    .argument('[project]', 'project path', process.cwd())
+    .option('--from-failures <path>', 'load session logs from a JSON/JSONL file')
+    .option('--from-history', 'load session logs from fusion.sqlite session history')
+    .option('--output <format>', 'output format: agents-md | claude-md | gemini-md | json', 'agents-md')
+    .option('--min-occurrences <number>', 'minimum occurrences required to emit a rule', parsePositiveInteger, 3)
+    .option('--dry-run', 'analyze without writing any files')
+    .description('Learn recurring failure patterns from Zincgraph session logs')
+    .action(async (project: string, options: { fromFailures?: string; fromHistory?: boolean; output: string; minOccurrences: number; dryRun?: boolean }) => {
+      const format = parseRuleFormat(options.output);
+      const logs = collectLearnLogs(project, options);
+      const adapter = createLearnIntegrationAdapter({ minOccurrences: options.minOccurrences });
+      const result = adapter.analyzeFailures(logs);
+      const report = adapter.generateRules(result, format);
+
+      if (!options.dryRun && format !== 'json') {
+        const targetPath = learnTargetPath(project, format);
+        adapter.applyRules(report, targetPath);
+      }
+
+      console.log(report.trimEnd());
     });
 
   return program;
@@ -396,10 +444,136 @@ async function ensureReviewFreshness(
   return readiness;
 }
 
+function createProjectFeedbackLoop(projectPath: string): CompressionFeedbackLoop {
+  return new CompressionFeedbackLoop({ store: new FeedbackStore({ projectPath }) });
+}
+
+function collectLearnLogs(
+  projectPath: string,
+  options: { fromFailures?: string; fromHistory?: boolean }
+): SessionLog[] {
+  const logs: SessionLog[] = [];
+  const shouldReadHistory = options.fromHistory ?? !options.fromFailures;
+  if (shouldReadHistory) {
+    logs.push(...new FeedbackStore({ projectPath }).listSessionLogs());
+  }
+  if (options.fromFailures) {
+    logs.push(...readSessionLogsFromPath(options.fromFailures));
+  }
+  return logs;
+}
+
+function readSessionLogsFromPath(sourcePath: string): SessionLog[] {
+  const raw = readFileSync(resolve(sourcePath), 'utf8');
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+    try {
+      return normalizeSessionLogPayload(JSON.parse(trimmed));
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) {
+        throw error;
+      }
+      // fall through to JSONL parsing below
+    }
+  }
+
+  return trimmed
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => normalizeSessionLogPayload(JSON.parse(line)))
+    .flat();
+}
+
+function normalizeSessionLogPayload(payload: unknown): SessionLog[] {
+  const values = Array.isArray(payload)
+    ? payload
+    : payload && typeof payload === 'object' && Array.isArray((payload as { logs?: unknown }).logs)
+      ? ((payload as { logs: unknown[] }).logs)
+      : [payload];
+  return values
+    .map(normalizeSessionLog)
+    .filter((log): log is SessionLog => log !== null);
+}
+
+function normalizeSessionLog(value: unknown): SessionLog | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const toolName = stringValue(record.toolName ?? record.tool_name ?? record.tool ?? '');
+  if (!toolName) {
+    return null;
+  }
+  const log: SessionLog = {
+    recordedAt: numberValue(record.recordedAt ?? record.recorded_at ?? record.timestamp ?? Date.now()) ?? Date.now(),
+    toolName,
+    input: stringValue(record.input ?? record.request ?? record.args ?? ''),
+    output: stringValue(record.output ?? record.result ?? ''),
+    durationMs: numberValue(record.durationMs ?? record.duration_ms ?? 0) ?? 0
+  };
+  const id = numberValue(record.id);
+  if (id !== undefined) {
+    log.id = id;
+  }
+  const error = optionalString(record.error ?? record.err ?? undefined);
+  if (error !== undefined) {
+    log.error = error;
+  }
+  const queryContext = optionalString(record.queryContext ?? record.query_context ?? undefined);
+  if (queryContext !== undefined) {
+    log.queryContext = queryContext;
+  }
+  return log;
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value : value === undefined || value === null ? '' : String(value);
+}
+
+function optionalString(value: unknown): string | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  const text = stringValue(value);
+  return text.length > 0 ? text : undefined;
+}
+
+function numberValue(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function parseRuleFormat(value: string): RuleFormat {
+  if (value === 'agents-md' || value === 'claude-md' || value === 'gemini-md' || value === 'json') {
+    return value;
+  }
+  throw new Error(`Unsupported learn output format: ${value}. Use agents-md, claude-md, gemini-md, or json.`);
+}
+
+function learnTargetPath(projectPath: string, format: RuleFormat): string {
+  const fileName = format === 'agents-md'
+    ? 'AGENTS.md'
+    : format === 'claude-md'
+      ? 'CLAUDE.md'
+      : 'GEMINI.md';
+  return join(projectPath, fileName);
+}
+
 function fusionCliOptions(
   options: { topk: number; maxTokens: number },
   cliOptions: CliBuildOptions
-): { topk: number; maxTokens: number; createFusionEngine?: (projectPath: string) => Pick<TopoSemanticQueryEngine, 'query' | 'search'> } {
+): { topk: number; maxTokens: number; createFusionEngine?: (projectPath: string) => FusionEngineLike } {
   const base = { topk: options.topk, maxTokens: options.maxTokens };
   return cliOptions.createFusionEngine ? { ...base, createFusionEngine: cliOptions.createFusionEngine } : base;
 }
@@ -427,11 +601,38 @@ async function runFusionQuery(
   options: {
     topk: number;
     maxTokens: number;
-    createFusionEngine?: (projectPath: string) => Pick<TopoSemanticQueryEngine, 'query' | 'search'>;
+    createFusionEngine?: (projectPath: string) => FusionEngineLike;
   }
 ): Promise<ContextCapsule> {
-  const engine = options.createFusionEngine?.(projectPath) ?? new TopoSemanticQueryEngine(projectPath);
+  const hasCustomEngine = options.createFusionEngine !== undefined;
+  const engine = options.createFusionEngine?.(projectPath) ?? createFeedbackAwareQueryEngine(projectPath);
+  if (hasCustomEngine) {
+    try {
+      engine.setDynamicPolicy?.(createFeedbackAwarePolicy(projectPath));
+    } catch {
+      console.warn(`Feedback-aware policy initialization failed for ${projectPath}; leaving dynamic policy unset.`);
+      engine.setDynamicPolicy?.(undefined);
+    }
+  }
   return engine[method](query, { topk: options.topk, maxTokens: options.maxTokens });
+}
+
+function createFeedbackAwareQueryEngine(projectPath: string): TopoSemanticQueryEngine {
+  let dynamicPolicy: DynamicFusionPolicy | undefined;
+  try {
+    dynamicPolicy = createFeedbackAwarePolicy(projectPath);
+  } catch {
+    console.warn(`Feedback-aware policy initialization failed for ${projectPath}; using default fusion policy.`);
+  }
+
+  const dependencies = {
+    compressResults: createProjectFusionCompressor(projectPath),
+    ...(dynamicPolicy ? { dynamicPolicy } : {})
+  };
+
+  return new TopoSemanticQueryEngine(projectPath, {
+    dependencies
+  });
 }
 
 

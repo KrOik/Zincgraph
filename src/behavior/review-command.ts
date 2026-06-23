@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 
 import { runPonytailReview, type PonytailCommandDelegation } from '../bridge/ponytailAdapter.js';
@@ -11,6 +12,13 @@ import {
   type GraphReviewResult
 } from './graph-review.js';
 import type { CodeGraphSnapshot } from '../vector/code-to-vectors.js';
+import {
+  ReviewCompressor,
+  formatReviewCompressionResult,
+  type ReviewCompressionOptions,
+  type ReviewCompressionResult
+} from '../compression/review-compressor.js';
+import type { CompressionFeedbackLoop } from '../compression/feedback-loop.js';
 
 export interface GraphReviewCommandOptions {
   diff?: boolean;
@@ -21,6 +29,10 @@ export interface GraphReviewCommandOptions {
   runPonytail?: typeof runPonytailReview;
   readSnapshot?: (projectPath: string) => CodeGraphSnapshot;
   readDiff?: (projectPath: string) => string;
+  /** When set, review findings are compressed before output. */
+  compress?: boolean | ReviewCompressionOptions;
+  compressor?: ReviewCompressor;
+  feedbackLoop?: CompressionFeedbackLoop;
 }
 
 export interface GraphReviewCommandResult {
@@ -30,6 +42,7 @@ export interface GraphReviewCommandResult {
   graphFindings: GraphReviewFinding[];
   graphAvailable: boolean;
   warnings: string[];
+  compressed?: ReviewCompressionResult;
 }
 
 export async function runGraphReviewCommand(
@@ -44,19 +57,56 @@ export async function runGraphReviewCommand(
     const diffText = options.diffText ?? (options.diff ? (options.readDiff ?? readGitDiff)(resolvedProject) : '');
     const graph = new GraphReviewAnalyzer().analyze({ snapshot, diffText, evidence: options.evidence });
     const graphFindings = options.diff ? graph.reviewFindings : graph.findings;
-    return { projectPath: resolvedProject, ponytail, graph, graphFindings, graphAvailable: true, warnings };
+    const base: Omit<GraphReviewCommandResult, 'compressed'> = { projectPath: resolvedProject, ponytail, graph, graphFindings, graphAvailable: true, warnings };
+    if (options.compress) {
+      const compressor = options.compressor ?? ReviewCompressor.createFromProject(resolvedProject, { feedbackLoop: options.feedbackLoop });
+      const compressionOptions: ReviewCompressionOptions = typeof options.compress === 'object' ? options.compress : {};
+      const compressed = await compressor.compress(graphFindings, {
+        ...compressionOptions,
+        queryContext: compressionOptions.queryContext ?? buildReviewCompressionScope(resolvedProject, snapshot, diffText, Boolean(options.diff))
+      });
+      return { ...base, compressed };
+    }
+    return base;
   } catch (error) {
     warnings.push(`graph review unavailable: ${error instanceof Error ? error.message : String(error)}`);
     return { projectPath: resolvedProject, ponytail, graph: null, graphFindings: [], graphAvailable: false, warnings };
   }
 }
 
+function buildReviewCompressionScope(
+  projectPath: string,
+  snapshot: CodeGraphSnapshot,
+  diffText: string,
+  diffMode: boolean
+): string {
+  const fingerprint = diffMode
+    ? diffText
+    : JSON.stringify(snapshot.nodes.map((node) => [
+        node.id,
+        node.filePath,
+        node.kind,
+        node.qualifiedName,
+        node.language,
+        node.startLine ?? '',
+        node.endLine ?? '',
+        node.signature ?? ''
+      ]));
+  const hash = createHash('sha256').update(`${projectPath}\n${fingerprint}`).digest('hex').slice(0, 16);
+  return `${diffMode ? 'diff' : 'snapshot'}:${hash}`;
+}
+
 export function formatGraphReviewCommandResult(result: GraphReviewCommandResult): string[] {
-  return [
+  const lines = [
     result.ponytail.marker,
     `project=${result.ponytail.projectPath}`,
     `promptLength=${result.ponytail.prompt.length}`,
-    ...result.warnings.map((warning) => `warning: ${warning}`),
-    ...formatGraphReviewFindings(result.graphFindings)
+    ...result.warnings.map((warning) => `warning: ${warning}`)
   ];
+  if (result.compressed) {
+    lines.push(...formatReviewCompressionResult(result.compressed));
+    return lines;
+  }
+  lines.push(...formatGraphReviewFindings(result.graphFindings));
+  return lines;
 }

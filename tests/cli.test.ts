@@ -5,6 +5,7 @@ import type { PonytailCommandDelegation } from '../src/bridge/ponytailAdapter.js
 import type { FreshnessGateOptions } from '../src/freshness/freshness-gate.js';
 import type { ContextCapsule } from '../src/fusion/query-engine.js';
 import type { DedupCommandResult } from '../src/behavior/dedup-command.js';
+import type { GraphReviewCommandOptions } from '../src/behavior/review-command.js';
 import type { CodeGraphSnapshot } from '../src/vector/code-to-vectors.js';
 import type { UnifiedInstallResult } from '../src/installer/unified-installer.js';
 import type { AutoSyncResult, RunAutoSyncOnceInput } from '../src/freshness/auto-sync.js';
@@ -166,6 +167,30 @@ describe('Phase 2 CLI integration', () => {
     expect(output).toContain('Existing same-signature function');
   });
 
+  test('review command enables compression and project-scoped feedback loops by default', async () => {
+    let observed: GraphReviewCommandOptions | undefined;
+    await runCli(['review', '.', '--force'], {
+      createFreshnessGate: () => ({
+        ensureReady: async () => ({ allowed: true, forced: true, synced: false, freshness: { fresh: 1, pending: 0, stale: 0, failed: 0, total: 1, isFresh: true, warnings: [], entries: [] }, warnings: [] })
+      }),
+      readGraphSnapshot: (project) => emptySnapshot(project),
+      runPonytailReview: (project, options = {}) => ponytailDelegation(project, options.diff ?? false),
+      runGraphReview: async (project, options) => {
+        observed = options;
+        return {
+          projectPath: project,
+          ponytail: ponytailDelegation(project, options.diff ?? false),
+          graph: null,
+          graphFindings: [],
+          graphAvailable: true,
+          warnings: []
+        };
+      }
+    });
+    expect(observed?.compress).toBe(true);
+    expect(observed?.feedbackLoop).toBeDefined();
+  });
+
   test('review force bypasses freshness blocking', async () => {
     let forced: boolean | undefined;
     await runCli(['review', '.', '--force'], {
@@ -195,7 +220,7 @@ describe('Phase 2 CLI integration', () => {
     });
     expect(ponytailCalls).toBe(1);
     expect(output).toContain('PONYTAIL');
-    expect(output).toContain('Zincgraph graph evidence: none');
+    expect(output).toContain('# Graph review (compressed): 0 finding group(s)');
   });
 
   test('review reports index-not-fresh when sync fails', async () => {

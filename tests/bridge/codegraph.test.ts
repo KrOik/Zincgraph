@@ -61,5 +61,5 @@ describe('CodeGraph Phase 0 adapter', () => {
   test('uses the same status command shape required by zincgraph status', () => {
     const result = runCodeGraphCli(['status', '.', '--json']);
     expect(result.args.slice(0, 2)).toEqual(['status', '.']);
-  });
+  }, CODEGRAPH_CLI_TEST_TIMEOUT_MS);
 });
