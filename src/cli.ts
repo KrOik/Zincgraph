@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import { Command } from 'commander';
 
@@ -9,7 +10,9 @@ import { runPonytailReview as defaultRunPonytailReview } from './bridge/ponytail
 import { probeZvec } from './bridge/zvecAdapter.js';
 import { vectorizeProject } from './vector/code-to-vectors.js';
 import { runVectorizeCommand } from './vector/vectorize-command.js';
+import { buildRegistryFastCapsule, formatFastGraphNavigation, type ParsedArgs as FastParsedArgs, type Snapshot as FastSnapshot } from './fast-cli.js';
 import { TopoSemanticQueryEngine, type ContextCapsule } from './fusion/query-engine.js';
+import { summarizeContextCapsule } from './fusion/context-summary.js';
 import { FreshnessGate, type FreshnessGateOptions, type FreshnessGateResult } from './freshness/freshness-gate.js';
 import {
   formatGraphReviewCommandResult,
@@ -17,23 +20,22 @@ import {
   type GraphReviewCommandOptions,
   type GraphReviewCommandResult
 } from './behavior/review-command.js';
-import type { CodeGraphSnapshot } from './vector/code-to-vectors.js';
+import { readCodeGraphSnapshot, type CodeGraphSnapshot } from './vector/code-to-vectors.js';
 import { runDedupCommand, type DedupCommandResult } from './behavior/dedup-command.js';
-import { runAutoSyncOnce as defaultRunAutoSyncOnce } from './freshness/auto-sync.js';
+import { runAutoSyncOnce as defaultRunAutoSyncOnce, type AutoSyncResult } from './freshness/auto-sync.js';
 import { probeHeadroom } from './bridge/headroomAdapter.js';
-import { FusionCompressor, createProjectFusionCompressor } from './compression/fusion-compressor.js';
+import { createProjectFusionCompressor } from './compression/fusion-compressor.js';
 import { CcrStore } from './compression/ccr-store.js';
 import { CompressionFeedbackLoop, recordRetrievalFeedback } from './compression/feedback-loop.js';
 import { FeedbackStore, type SessionLog } from './compression/feedback-store.js';
 import { createLearnIntegrationAdapter, type RuleFormat } from './compression/learn-integration.js';
 import { createFeedbackAwarePolicy, type DynamicFusionPolicy } from './compression/ranking-adjuster.js';
 import { FusionStore } from './freshness/fusion-store.js';
+import { type ManifestState } from './freshness/manifest.js';
+import { updateEmbeddingMetadataCache } from './vector/embedding/config.js';
 
 const CODEGRAPH_DELEGATED_COMMANDS = [
   { command: 'index', upstream: 'index', argumentDescription: 'CodeGraph index arguments', description: 'Delegate indexing to CodeGraph' },
-  { command: 'node', upstream: 'node', argumentDescription: 'CodeGraph node arguments', description: 'Delegate symbol/file node view to CodeGraph' },
-  { command: 'callers', upstream: 'callers', argumentDescription: 'CodeGraph callers arguments', description: 'Delegate caller enumeration to CodeGraph' },
-  { command: 'callees', upstream: 'callees', argumentDescription: 'CodeGraph callees arguments', description: 'Delegate callee enumeration to CodeGraph' },
   { command: 'impact', upstream: 'impact', argumentDescription: 'CodeGraph impact arguments', description: 'Delegate impact analysis to CodeGraph' },
   { command: 'affected', upstream: 'affected', argumentDescription: 'CodeGraph affected arguments', description: 'Delegate affected test recommendation to CodeGraph' },
   { command: 'sync', upstream: 'sync', argumentDescription: 'CodeGraph sync arguments', description: 'Delegate incremental sync to CodeGraph' },
@@ -49,8 +51,6 @@ interface FusionEngineLike {
   search(query: string, options?: { topk?: number; maxTokens?: number }): Promise<ContextCapsule>;
   setDynamicPolicy?(policy: DynamicFusionPolicy | undefined): void;
 }
-
-type FusionOutputFormat = 'compact-json' | 'full-json' | 'text';
 
 import { startZincgraphMcpServer } from './mcp/unified-server.js';
 import { installZincgraph, type AgentName, type UnifiedInstallResult } from './installer/unified-installer.js';
@@ -125,6 +125,36 @@ export function buildCli(cliOptions: CliBuildOptions = {}): Command {
         process.stderr.write(result.stderr);
       }
       process.exitCode = result.status;
+    });
+
+  program
+    .command('node')
+    .argument('[args...]', 'symbol or file arguments')
+    .allowUnknownOption(true)
+    .allowExcessArguments(true)
+    .description('Run native Zincgraph node navigation')
+    .action(async (args: string[] = []) => {
+      await writeNativeGraphNavigation('node', args, cliOptions);
+    });
+
+  program
+    .command('callers')
+    .argument('[args...]', 'symbol arguments')
+    .allowUnknownOption(true)
+    .allowExcessArguments(true)
+    .description('Run native Zincgraph caller navigation')
+    .action(async (args: string[] = []) => {
+      await writeNativeGraphNavigation('callers', args, cliOptions);
+    });
+
+  program
+    .command('callees')
+    .argument('[args...]', 'symbol arguments')
+    .allowUnknownOption(true)
+    .allowExcessArguments(true)
+    .description('Run native Zincgraph callee navigation')
+    .action(async (args: string[] = []) => {
+      await writeNativeGraphNavigation('callees', args, cliOptions);
     });
 
 
@@ -266,8 +296,10 @@ export function buildCli(cliOptions: CliBuildOptions = {}): Command {
       const result = await (cliOptions.runAutoSyncOnce ?? defaultRunAutoSyncOnce)(project, {
         files: options.file,
         source: 'cli'
+      }, {
+        debounceMs: 0
       });
-      console.log(JSON.stringify(result, null, 2));
+      console.log(JSON.stringify(summarizeCliAutoSyncResult(result)));
     });
 
   program
@@ -295,11 +327,22 @@ export function buildCli(cliOptions: CliBuildOptions = {}): Command {
     .option('-p, --project <project>', 'project path', process.cwd())
     .option('--topk <number>', 'maximum result count', parsePositiveInteger, 10)
     .option('--max-tokens <number>', 'context token budget', parsePositiveInteger, 8000)
-    .option('--format <format>', 'output format: compact-json | full-json | text', parseFusionOutputFormat, 'compact-json')
+    .option('--full-json', 'print the full context capsule including documents, edges, and context excerpts')
     .description('Run Zincgraph fusion explore (graph + vector + lexical text + freshness)')
-    .action(async (queryParts: string[], options: { project: string; topk: number; maxTokens: number; format: FusionOutputFormat }) => {
-      const capsule = await runFusionQuery('query', queryParts.join(' '), options.project, fusionCliOptions(options, cliOptions));
-      writeFusionOutput(capsule, options.format);
+    .action(async (queryParts: string[], options: { project: string; topk: number; maxTokens: number; fullJson?: boolean }) => {
+      const query = queryParts.join(' ');
+      const fastCapsule = await buildRegistryFastCapsule({
+        project: options.project,
+        query,
+        topk: options.topk,
+        maxTokens: options.maxTokens
+      });
+      if (fastCapsule) {
+        console.log(JSON.stringify(fastCapsule));
+        return;
+      }
+      const capsule = await runFusionQuery('query', query, options.project, fusionCliOptions(options, cliOptions));
+      console.log(JSON.stringify(options.fullJson ? capsule : summarizeContextCapsule(capsule), null, 2));
     });
 
   program
@@ -311,9 +354,9 @@ export function buildCli(cliOptions: CliBuildOptions = {}): Command {
     .option('--codegraph', 'delegate to upstream CodeGraph query instead of Zincgraph fusion search')
     .option('--kind <kind>', 'CodeGraph symbol kind filter when --codegraph is used')
     .option('--json', 'request JSON output when --codegraph is used')
-    .option('--format <format>', 'output format for Zincgraph fusion search: compact-json | full-json | text', parseFusionOutputFormat, 'compact-json')
+    .option('--full-json', 'print the full context capsule including documents, edges, and context excerpts')
     .description('Run Zincgraph fusion search by default; use --codegraph for upstream CodeGraph query')
-    .action(async (queryParts: string[], options: { project: string; topk: number; maxTokens: number; codegraph?: boolean; kind?: string; json?: boolean; format: FusionOutputFormat }) => {
+    .action(async (queryParts: string[], options: { project: string; topk: number; maxTokens: number; codegraph?: boolean; kind?: string; json?: boolean; fullJson?: boolean }) => {
       const query = queryParts.join(' ');
       if (options.codegraph) {
         const args = ['query', query, '-p', options.project, '--limit', String(options.topk)];
@@ -326,8 +369,18 @@ export function buildCli(cliOptions: CliBuildOptions = {}): Command {
         writeCodeGraphResult(runCodeGraph(cliOptions)(args));
         return;
       }
+      const fastCapsule = await buildRegistryFastCapsule({
+        project: options.project,
+        query,
+        topk: options.topk,
+        maxTokens: options.maxTokens
+      });
+      if (fastCapsule) {
+        console.log(JSON.stringify(fastCapsule));
+        return;
+      }
       const capsule = await runFusionQuery('search', query, options.project, fusionCliOptions(options, cliOptions));
-      writeFusionOutput(capsule, options.format);
+      console.log(JSON.stringify(options.fullJson ? capsule : summarizeContextCapsule(capsule), null, 2));
     });
 
   program
@@ -355,13 +408,22 @@ export function buildCli(cliOptions: CliBuildOptions = {}): Command {
     .description('Output compression statistics for the project')
     .action((project: string) => {
       const store = new CcrStore({ projectPath: project });
-      const storeStats = store.stats();
-      const compressor = FusionCompressor.createFromProject(project);
-      const sessionStats = compressor.getStats();
-      console.log(JSON.stringify({
-        ccrStore: storeStats,
-        session: sessionStats
-      }, null, 2));
+      try {
+        const storeStats = store.stats();
+        console.log(JSON.stringify({
+          ccrStore: storeStats,
+          session: {
+            totalCompressions: 0,
+            totalTokensBefore: 0,
+            totalTokensAfter: 0,
+            totalTokensSaved: 0,
+            averageCompressionRatio: 0,
+            retrievalCount: 0
+          }
+        }, null, 2));
+      } finally {
+        store.close();
+      }
     });
 
   program
@@ -381,6 +443,9 @@ export function buildCli(cliOptions: CliBuildOptions = {}): Command {
           throw new Error(`config set requires a value. Usage: zincgraph config set ${key} <value>`);
         }
         store.setMetadata(key, value);
+        if (key.startsWith('embedding.')) {
+          updateEmbeddingMetadataCache(options.project, { [key]: value });
+        }
         console.log(JSON.stringify({ key, value, updated: true }, null, 2));
       } else {
         throw new Error(`Unsupported config action: ${action}. Use 'get' or 'set'.`);
@@ -394,13 +459,19 @@ export function buildCli(cliOptions: CliBuildOptions = {}): Command {
     .description('Retrieve original uncompressed content by CCR hash')
     .action((hash: string, project: string) => {
       const store = new CcrStore({ projectPath: project });
-      const entry = store.get(hash);
-      if (entry) {
-        recordRetrievalFeedback(createProjectFeedbackLoop(project), hash);
-        console.log(JSON.stringify(entry, null, 2));
-      } else {
-        console.error(`No CCR entry found for hash: ${hash}`);
-        process.exitCode = 1;
+      const feedbackLoop = createProjectFeedbackLoop(project);
+      try {
+        const entry = store.get(hash);
+        if (entry) {
+          recordRetrievalFeedback(feedbackLoop, hash);
+          console.log(JSON.stringify(entry, null, 2));
+        } else {
+          console.error(`No CCR entry found for hash: ${hash}`);
+          process.exitCode = 1;
+        }
+      } finally {
+        feedbackLoop.close();
+        store.close();
       }
     });
 
@@ -462,7 +533,12 @@ function collectLearnLogs(
   const logs: SessionLog[] = [];
   const shouldReadHistory = options.fromHistory ?? !options.fromFailures;
   if (shouldReadHistory) {
-    logs.push(...new FeedbackStore({ projectPath }).listSessionLogs());
+    const store = new FeedbackStore({ projectPath });
+    try {
+      logs.push(...store.listSessionLogs());
+    } finally {
+      store.close();
+    }
   }
   if (options.fromFailures) {
     logs.push(...readSessionLogsFromPath(options.fromFailures));
@@ -585,96 +661,6 @@ function fusionCliOptions(
   return cliOptions.createFusionEngine ? { ...base, createFusionEngine: cliOptions.createFusionEngine } : base;
 }
 
-function writeFusionOutput(capsule: ContextCapsule, format: FusionOutputFormat): void {
-  if (format === 'full-json') {
-    console.log(JSON.stringify(capsule, null, 2));
-    return;
-  }
-  if (format === 'text') {
-    console.log(formatFusionText(capsule));
-    return;
-  }
-  console.log(JSON.stringify(compactFusionResult(capsule), null, 2));
-}
-
-function compactFusionResult(capsule: ContextCapsule): Record<string, unknown> {
-  return {
-    query: capsule.query,
-    strippedQuery: capsule.strippedQuery,
-    route: capsule.route,
-    filters: capsule.filters,
-    textBranch: capsule.policy.textBranch,
-    nativeFts: capsule.policy.nativeFts,
-    results: capsule.nodes.map((node, index) => ({
-      rank: index + 1,
-      nodeId: node.nodeId,
-      filePath: node.filePath,
-      language: node.language,
-      kind: node.kind,
-      qualifiedName: node.qualifiedName,
-      score: roundNumber(node.score),
-      sources: node.sources,
-      sourceScores: node.sourceScores,
-      fileSymbols: node.fileSymbols,
-      freshnessState: node.freshnessState,
-      warnings: node.warnings,
-      annotations: node.annotations,
-      signalText: node.fileSymbols?.length ? `related symbols: ${node.fileSymbols.join(' ')}` : undefined,
-      excerpt: node.fileSymbols?.length
-        ? [
-            `related symbols: ${node.fileSymbols.join(' ')}`,
-            compactExcerpt(node.content)
-          ].filter(Boolean).join('\n')
-        : compactExcerpt(node.content)
-    })),
-    freshness: {
-      fresh: capsule.freshness.fresh,
-      pending: capsule.freshness.pending,
-      stale: capsule.freshness.stale,
-      failed: capsule.freshness.failed,
-      total: capsule.freshness.total,
-      isFresh: capsule.freshness.isFresh,
-      warnings: capsule.freshness.warnings
-    },
-    context: {
-      maxTokens: capsule.context.maxTokens,
-      usedTokens: capsule.context.usedTokens,
-      truncated: capsule.context.truncated,
-      includedNodeIds: capsule.context.includedNodeIds,
-      droppedNodeIds: capsule.context.droppedNodeIds
-    },
-    diagnostics: capsule.diagnostics
-  };
-}
-
-function formatFusionText(capsule: ContextCapsule): string {
-  const lines = [
-    `query: ${capsule.query}`,
-    `route: ${capsule.route}`,
-    `freshness: ${capsule.freshness.fresh} fresh, ${capsule.freshness.pending} pending, ${capsule.freshness.stale} stale`
-  ];
-  for (const [index, node] of capsule.nodes.entries()) {
-    lines.push(`${index + 1}. ${node.qualifiedName} (${node.kind}) ${node.filePath} score=${roundNumber(node.score)} sources=${node.sources.join(',')}`);
-  }
-  return lines.join('\n');
-}
-
-function compactExcerpt(content: string): string {
-  const normalized = content.replace(/\s+/g, ' ').trim();
-  return normalized.length > 240 ? `${normalized.slice(0, 237)}...` : normalized;
-}
-
-function roundNumber(value: number): number {
-  return Math.round(value * 10000) / 10000;
-}
-
-function parseFusionOutputFormat(value: string): FusionOutputFormat {
-  if (value === 'compact-json' || value === 'full-json' || value === 'text') {
-    return value;
-  }
-  throw new Error(`Unsupported fusion output format: ${value}. Use compact-json, full-json, or text.`);
-}
-
 function writeDelegatedStatusOutput(stdout: string | undefined): void {
   if (!stdout) {
     return;
@@ -765,6 +751,52 @@ function runCodeGraph(cliOptions: CliBuildOptions): CodeGraphRunner {
   return cliOptions.runCodeGraphCli ?? defaultRunCodeGraphCli;
 }
 
+async function writeNativeGraphNavigation(
+  command: 'node' | 'callers' | 'callees',
+  args: string[],
+  cliOptions: CliBuildOptions
+): Promise<void> {
+  const parsed = parseGraphNavigationArgs(args);
+  const snapshotReader = cliOptions.readGraphSnapshot ?? readCodeGraphSnapshot;
+  const snapshot = await Promise.resolve(snapshotReader(parsed.project));
+  const output = formatFastGraphNavigation(snapshot as unknown as FastSnapshot, command, {
+    project: parsed.project,
+    query: parsed.symbol,
+    topk: parsed.topk,
+    maxTokens: parsed.maxTokens,
+    json: false,
+    fullJson: false
+  } satisfies FastParsedArgs);
+  console.log(output);
+}
+
+function parseGraphNavigationArgs(args: string[]): { project: string; symbol: string; topk: number; maxTokens: number } {
+  let project = process.cwd();
+  let topk = 10;
+  let maxTokens = 8000;
+  const positional: string[] = [];
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? '';
+    if (arg === '-p' || arg === '--project') {
+      project = args[++index] ?? project;
+    } else if (arg === '--topk' || arg === '--limit') {
+      topk = Number.parseInt(args[++index] ?? String(topk), 10) || topk;
+    } else if (arg === '--max-tokens') {
+      maxTokens = Number.parseInt(args[++index] ?? String(maxTokens), 10) || maxTokens;
+    } else if (!arg.startsWith('-')) {
+      positional.push(arg);
+    }
+  }
+
+  return {
+    project,
+    symbol: positional.join(' ').trim(),
+    topk,
+    maxTokens
+  };
+}
+
 function writeCodeGraphResult(result: ReturnType<CodeGraphRunner>): void {
   if (result.stdout) {
     process.stdout.write(result.stdout);
@@ -790,7 +822,34 @@ function formatInstallResult(result: UnifiedInstallResult): string {
   }, null, 2);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+function summarizeCliAutoSyncResult(result: AutoSyncResult): {
+  transitions: Array<{
+    filePath: string;
+    states: string[];
+  }>;
+  warnings?: string[];
+} {
+  const transitions = result.transitions.map((transition) => ({
+    filePath: transition.filePath,
+    states: [transition.stale.state, transition.pending?.state, transition.fresh?.state, transition.failed?.state]
+      .filter((state): state is ManifestState => state !== undefined)
+  }));
+  return result.warnings.length > 0 ? { transitions, warnings: [...result.warnings] } : { transitions };
+}
+
+export function isMainModule(entryPath: string | undefined = process.argv[1]): boolean {
+  return Boolean(entryPath && import.meta.url === pathToFileURL(entryPath).href);
+}
+
+function isCompiledCliEntry(entryPath: string | undefined = process.argv[1]): boolean {
+  if (!entryPath) {
+    return false;
+  }
+  const normalized = resolve(entryPath).replace(/\\/g, '/').toLowerCase();
+  return normalized.endsWith('/dist/cli-full.js');
+}
+
+if (isMainModule() || isCompiledCliEntry()) {
   buildCli().parseAsync(process.argv).catch((error: unknown) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
