@@ -67,6 +67,29 @@ describe('RelevanceScorer BM25 mode', () => {
       expect(result.score).toBe(0);
     }
   });
+
+  test('expands priority ordering queries into ranking-aware matches', () => {
+    const scorer = createDefaultRelevanceScorer();
+    const documents: TextDocument[] = [
+      {
+        nodeId: 'ranking-adjuster',
+        content: 'function createFeedbackAwarePolicy() { return policy; }',
+        filePath: 'src/compression/ranking-adjuster.ts',
+        qualifiedName: 'createFeedbackAwarePolicy'
+      },
+      {
+        nodeId: 'noise',
+        content: 'function renderButton() { return true; }',
+        filePath: 'src/ui/button.ts',
+        qualifiedName: 'renderButton'
+      }
+    ];
+
+    const results = scorer.score('which code decides priority ordering when search results are mixed from multiple sources', documents, { mode: 'bm25' });
+    const sorted = [...results].sort((a, b) => b.score - a.score);
+
+    expect(sorted[0]?.nodeId).toBe('ranking-adjuster');
+  });
 });
 
 describe('RelevanceScorer embedding mode', () => {

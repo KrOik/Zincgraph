@@ -6,7 +6,7 @@ import { mkdtemp, writeFile, appendFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 export const WEIGHTS = Object.freeze({
   retrieval: 30,
@@ -26,6 +26,21 @@ const DIMENSION_SCORE_KEYS = Object.freeze(['retrieval', 'density', 'runtime', '
 
 const PRIMARY_ARMS = ['codegraph', 'zincgraph-fusion'];
 const DELEGATED_ARM = 'zincgraph-delegated';
+export const TASK_CATEGORIES = Object.freeze({
+  SYMBOL_RETRIEVAL: 'symbol-retrieval',
+  WORKFLOW_DISCOVERY: 'workflow-discovery',
+  TOOL_SURFACE: 'tool-surface',
+  FRESHNESS: 'freshness',
+  BEHAVIOR_ANALYSIS: 'behavior-analysis',
+  INDEX_STATUS: 'index-status',
+  INCREMENTAL_UPDATE: 'incremental-update',
+  GRAPH_TOPOLOGY: 'graph-topology',
+  GRAPH_NAVIGATION: 'graph-navigation',
+  TEST_IMPACT: 'test-impact',
+  SEMANTIC_INTENT: 'semantic-intent',
+  COMPRESSION_FEEDBACK: 'compression-feedback',
+  CROSS_MODULE: 'cross-module-integration'
+});
 const STRUCTURAL_TERMS = [
   'caller', 'callee', 'calls', 'called', 'edge', 'import', 'dependency',
   'freshness', 'stale', 'pending', 'fresh', 'manifest', 'dedup', 'review', 'semantic'
@@ -33,22 +48,22 @@ const STRUCTURAL_TERMS = [
 const FRESHNESS_TERMS = ['stale', 'pending', 'fresh', 'manifest'];
 const DEFAULT_RUNS = 5;
 const OUTPUT_PREVIEW_BYTES = 500;
-const SCORING_OUTPUT_CAP_BYTES = 16 * 1024;
-const SCORE_EVIDENCE_LIMIT = 50;
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ZINCGRAPH_CLI = join(ROOT, 'dist/cli.js');
-const CODEGRAPH_BIN = join(ROOT, 'node_modules/.bin/codegraph');
+const CODEGRAPH_BIN = join(ROOT, 'node_modules/@colbymchenry/codegraph/npm-shim.js');
+const CODEGRAPH_COMMAND = [process.execPath, CODEGRAPH_BIN];
 
 export const TASKS = Object.freeze([
   {
     id: 'exact-autosync-api',
+    category: TASK_CATEGORIES.SYMBOL_RETRIEVAL,
     description: 'Exact API/symbol retrieval for runAutoSyncOnce.',
     goldenFiles: ['src/freshness/auto-sync.ts'],
     goldenSymbols: ['runAutoSyncOnce'],
     relevantTerms: ['runAutoSyncOnce', 'AutoSyncPipeline', 'changed file'],
     commands: {
       codegraph: ['node_modules/.bin/codegraph', 'query', 'runAutoSyncOnce', '-p', '$PROJECT', '--json'],
-      'zincgraph-fusion': ['node', 'dist/cli.js', 'search', 'runAutoSyncOnce', '-p', '$PROJECT', '--topk', '10', '--format', 'compact-json'],
+      'zincgraph-fusion': ['node', 'dist/cli.js', 'search', 'runAutoSyncOnce', '-p', '$PROJECT', '--topk', '10'],
       'zincgraph-delegated': ['node', 'dist/cli.js', 'search', '--codegraph', 'runAutoSyncOnce', '-p', '$PROJECT', '--json']
     },
     expectedCapabilities: {
@@ -59,13 +74,14 @@ export const TASKS = Object.freeze([
   },
   {
     id: 'autosync-cli-flow',
+    category: TASK_CATEGORIES.WORKFLOW_DISCOVERY,
     description: 'CLI to auto-sync runtime flow.',
     goldenFiles: ['src/cli.ts', 'src/freshness/auto-sync.ts'],
     goldenSymbols: ['auto-sync', 'runAutoSyncOnce'],
     relevantTerms: ['auto sync', 'changed files', 'runAutoSyncOnce'],
     commands: {
       codegraph: ['node_modules/.bin/codegraph', 'explore', 'auto sync command changed files', '-p', '$PROJECT'],
-      'zincgraph-fusion': ['node', 'dist/cli.js', 'explore', 'auto sync command changed files', '-p', '$PROJECT', '--topk', '10', '--format', 'compact-json']
+      'zincgraph-fusion': ['node', 'dist/cli.js', 'explore', 'auto sync command changed files', '-p', '$PROJECT', '--topk', '10']
     },
     expectedCapabilities: {
       codegraph: ['graph'],
@@ -74,13 +90,14 @@ export const TASKS = Object.freeze([
   },
   {
     id: 'mcp-fusion-registry',
+    category: TASK_CATEGORIES.TOOL_SURFACE,
     description: 'Unified MCP registry and fusion tool surface.',
     goldenFiles: ['src/mcp/tool-registry.ts'],
     goldenSymbols: ['zincgraph_semantic_search', 'zincgraph_dedup_check'],
     relevantTerms: ['semantic search', 'tool registry', 'dedup'],
     commands: {
       codegraph: ['node_modules/.bin/codegraph', 'explore', 'zincgraph semantic search tool registry', '-p', '$PROJECT'],
-      'zincgraph-fusion': ['node', 'dist/cli.js', 'explore', 'zincgraph semantic search tool registry', '-p', '$PROJECT', '--topk', '10', '--format', 'compact-json']
+      'zincgraph-fusion': ['node', 'dist/cli.js', 'explore', 'zincgraph semantic search tool registry', '-p', '$PROJECT', '--topk', '10']
     },
     expectedCapabilities: {
       codegraph: ['graph'],
@@ -89,13 +106,14 @@ export const TASKS = Object.freeze([
   },
   {
     id: 'freshness-manifest',
+    category: TASK_CATEGORIES.FRESHNESS,
     description: 'Freshness and manifest semantics.',
     goldenFiles: ['src/freshness/manifest.ts', 'src/freshness/freshness-gate.ts', 'src/freshness/auto-sync.ts'],
     goldenSymbols: ['VectorManifestStore', 'FreshnessGate', 'AutoSyncPipeline'],
     relevantTerms: FRESHNESS_TERMS,
     commands: {
       codegraph: ['node_modules/.bin/codegraph', 'explore', 'manifest stale pending fresh freshness', '-p', '$PROJECT'],
-      'zincgraph-fusion': ['node', 'dist/cli.js', 'explore', 'manifest stale pending fresh freshness', '-p', '$PROJECT', '--topk', '10', '--format', 'compact-json']
+      'zincgraph-fusion': ['node', 'dist/cli.js', 'explore', 'manifest stale pending fresh freshness', '-p', '$PROJECT', '--topk', '10']
     },
     expectedCapabilities: {
       codegraph: ['graph'],
@@ -104,6 +122,7 @@ export const TASKS = Object.freeze([
   },
   {
     id: 'behavior-dedup-review',
+    category: TASK_CATEGORIES.BEHAVIOR_ANALYSIS,
     description: 'Graph review and semantic dedup behavior.',
     goldenFiles: ['src/behavior/dedup-check.ts', 'src/behavior/graph-review.ts'],
     goldenSymbols: ['runDedupCheck', 'analyzeGraphReview'],
@@ -111,7 +130,7 @@ export const TASKS = Object.freeze([
     commands: {
       codegraph: ['node_modules/.bin/codegraph', 'explore', 'semantic dedup graph review', '-p', '$PROJECT'],
       'zincgraph-fusion': [
-        ['node', 'dist/cli.js', 'explore', 'semantic dedup graph review', '-p', '$PROJECT', '--topk', '10', '--format', 'compact-json'],
+        ['node', 'dist/cli.js', 'explore', 'semantic dedup graph review', '-p', '$PROJECT', '--topk', '10'],
         ['node', 'dist/cli.js', 'dedup', '--describe', 'auto sync path containment', '-p', '$PROJECT']
       ]
     },
@@ -122,14 +141,15 @@ export const TASKS = Object.freeze([
   },
   {
     id: 'status-index-coverage',
+    category: TASK_CATEGORIES.INDEX_STATUS,
     description: 'Index status and coverage parseability.',
     goldenFiles: [],
     goldenSymbols: [],
     relevantTerms: ['initialized', 'fileCount', 'nodeCount', 'edgeCount', 'languages'],
     commands: {
       codegraph: ['node_modules/.bin/codegraph', 'status', '$PROJECT', '--json'],
-      'zincgraph-fusion': ['node', 'dist/cli.js', 'status', '$PROJECT', '--json', '--delegated-json'],
-      'zincgraph-delegated': ['node', 'dist/cli.js', 'status', '$PROJECT', '--json', '--delegated-json']
+      'zincgraph-fusion': ['node', 'dist/cli.js', 'status', '$PROJECT', '--json'],
+      'zincgraph-delegated': ['node', 'dist/cli.js', 'status', '$PROJECT', '--json']
     },
     expectedCapabilities: {
       codegraph: ['graph', 'index'],
@@ -139,6 +159,7 @@ export const TASKS = Object.freeze([
   },
   {
     id: 'isolated-update-freshness',
+    category: TASK_CATEGORIES.INCREMENTAL_UPDATE,
     description: 'Update/freshness behavior on isolated temp fixture.',
     isolated: true,
     goldenFiles: ['src/changed.ts'],
@@ -147,6 +168,115 @@ export const TASKS = Object.freeze([
     expectedCapabilities: {
       codegraph: ['graph', 'update'],
       'zincgraph-fusion': ['graph-delegation', 'freshness', 'update']
+    }
+  },
+  {
+    id: 'impact-autosync-topology',
+    category: TASK_CATEGORIES.GRAPH_TOPOLOGY,
+    description: 'Call graph impact around the auto-sync entry point.',
+    goldenFiles: ['src/cli.ts', 'src/freshness/auto-sync.ts', 'tests/freshness/auto-sync.test.ts'],
+    goldenSymbols: ['runAutoSyncOnce', 'AutoSyncPipeline'],
+    relevantTerms: ['impact', 'caller', 'callee', 'auto-sync', 'changed files'],
+    commands: {
+      codegraph: ['node_modules/.bin/codegraph', 'impact', 'runAutoSyncOnce', '-p', '$PROJECT'],
+      'zincgraph-fusion': ['node', 'dist/cli.js', 'impact', 'runAutoSyncOnce', '-p', '$PROJECT'],
+      'zincgraph-delegated': ['node', 'dist/cli.js', 'impact', 'runAutoSyncOnce', '-p', '$PROJECT']
+    },
+    expectedCapabilities: {
+      codegraph: ['graph', 'impact'],
+      'zincgraph-fusion': ['graph-delegation', 'impact'],
+      'zincgraph-delegated': ['delegation', 'graph', 'impact']
+    }
+  },
+  {
+    id: 'graph-navigation-autosync-pipeline',
+    category: TASK_CATEGORIES.GRAPH_NAVIGATION,
+    description: 'Direct node, caller, and callee navigation around the auto-sync pipeline.',
+    goldenFiles: ['src/freshness/auto-sync.ts', 'src/bridge/codegraphAdapter.ts', 'src/vector/code-to-vectors.ts', 'src/index.ts'],
+    goldenSymbols: ['runAutoSyncOnce', 'AutoSyncPipeline', 'syncCodeGraphProject', 'vectorizeProject'],
+    relevantTerms: ['node', 'callers', 'callees', 'handleChange', 'freshness', 'sync'],
+    commands: {
+      codegraph: [
+        ['node_modules/.bin/codegraph', 'node', 'runAutoSyncOnce', '-p', '$PROJECT'],
+        ['node_modules/.bin/codegraph', 'callers', 'AutoSyncPipeline', '-p', '$PROJECT'],
+        ['node_modules/.bin/codegraph', 'callees', 'runAutoSyncOnce', '-p', '$PROJECT']
+      ],
+      'zincgraph-fusion': [
+        ['node', 'dist/cli.js', 'node', 'runAutoSyncOnce', '-p', '$PROJECT'],
+        ['node', 'dist/cli.js', 'callers', 'AutoSyncPipeline', '-p', '$PROJECT'],
+        ['node', 'dist/cli.js', 'callees', 'runAutoSyncOnce', '-p', '$PROJECT']
+      ]
+    },
+    expectedCapabilities: {
+      codegraph: ['graph'],
+      'zincgraph-fusion': ['graph-delegation', 'fusion', 'graph']
+    }
+  },
+  {
+    id: 'affected-review-command-tests',
+    category: TASK_CATEGORIES.TEST_IMPACT,
+    description: 'Affected test selection for review-command changes.',
+    goldenFiles: ['tests/behavior/review-command.test.ts', 'tests/cli.test.ts', 'tests/mcp/unified-server.test.ts'],
+    goldenSymbols: ['runGraphReviewCommand', 'zincgraph_review', 'zincgraph_audit'],
+    relevantTerms: ['affected test files', 'review-command', 'cli.test', 'unified-server'],
+    commands: {
+      codegraph: ['node_modules/.bin/codegraph', 'affected', 'src/behavior/review-command.ts', '-p', '$PROJECT'],
+      'zincgraph-fusion': ['node', 'dist/cli.js', 'affected', 'src/behavior/review-command.ts', '-p', '$PROJECT']
+    },
+    expectedCapabilities: {
+      codegraph: ['graph', 'impact'],
+      'zincgraph-fusion': ['graph-delegation', 'impact']
+    }
+  },
+  {
+    id: 'semantic-intent-routing',
+    category: TASK_CATEGORIES.SEMANTIC_INTENT,
+    description: 'Natural-language semantic intent routing across compression ranking code.',
+    goldenFiles: ['src/fusion/intent-router.ts', 'src/compression/ranking-adjuster.ts', 'src/compression/relevance-scorer.ts'],
+    goldenSymbols: ['parseFusionQuery', 'createFeedbackAwarePolicy', 'RelevanceScorer'],
+    relevantTerms: ['parseFusionQuery', 'routeParsedQuery', 'createFeedbackAwarePolicy', 'RelevanceScorer', 'compressionAggressiveness'],
+    commands: {
+      codegraph: ['node_modules/.bin/codegraph', 'explore', 'which code decides priority ordering when search results are mixed from multiple sources path:src/compression', '-p', '$PROJECT'],
+      'zincgraph-fusion': ['node', 'dist/cli.js', 'search', 'which code decides priority ordering when search results are mixed from multiple sources path:src/compression', '-p', '$PROJECT', '--topk', '12']
+    },
+    expectedCapabilities: {
+      codegraph: ['graph'],
+      'zincgraph-fusion': ['graph-delegation', 'fusion', 'semantic-routing']
+    }
+  },
+  {
+    id: 'compression-feedback-cycle',
+    category: TASK_CATEGORIES.COMPRESSION_FEEDBACK,
+    description: 'Compression store, retrieval, and feedback-loop discoverability.',
+    goldenFiles: ['src/compression/ccr-store.ts', 'src/compression/feedback-loop.ts', 'src/compression/fusion-compressor.ts'],
+    goldenSymbols: ['CcrStore', 'CompressionFeedbackLoop', 'FusionCompressor'],
+    relevantTerms: ['compression', 'retrieve', 'feedback', 'hash', 'stats'],
+    commands: {
+      codegraph: ['node_modules/.bin/codegraph', 'explore', 'compression retrieve feedback hash stats', '-p', '$PROJECT'],
+      'zincgraph-fusion': [
+        ['node', 'dist/cli.js', 'explore', 'compression retrieve feedback hash stats', '-p', '$PROJECT', '--topk', '10'],
+        ['node', 'dist/cli.js', 'compression-stats', '$PROJECT']
+      ]
+    },
+    expectedCapabilities: {
+      codegraph: ['graph'],
+      'zincgraph-fusion': ['graph-delegation', 'fusion', 'compression', 'feedback']
+    }
+  },
+  {
+    id: 'cross-module-freshness-vector-flow',
+    category: TASK_CATEGORIES.CROSS_MODULE,
+    description: 'Cross-module path from CLI auto-sync through freshness and vector indexing.',
+    goldenFiles: ['src/cli.ts', 'src/freshness/auto-sync.ts', 'src/freshness/manifest.ts', 'src/vector/code-to-vectors.ts'],
+    goldenSymbols: ['runAutoSyncOnce', 'VectorManifestStore', 'vectorizeProject'],
+    relevantTerms: ['auto sync', 'freshness', 'manifest', 'vector', 'changed files'],
+    commands: {
+      codegraph: ['node_modules/.bin/codegraph', 'explore', 'auto sync freshness manifest vector changed files', '-p', '$PROJECT'],
+      'zincgraph-fusion': ['node', 'dist/cli.js', 'explore', 'auto sync freshness manifest vector changed files', '-p', '$PROJECT', '--topk', '12', '--max-tokens', '12000']
+    },
+    expectedCapabilities: {
+      codegraph: ['graph'],
+      'zincgraph-fusion': ['graph-delegation', 'fusion', 'freshness', 'vector']
     }
   }
 ]);
@@ -173,16 +303,7 @@ export function scoreTask(result, task, context = {}) {
   const fileRecall = goldenFileHits / Math.max(1, goldenFiles.length);
   const symbolRecall = goldenSymbols.length > 0 ? goldenSymbolHits / Math.max(1, goldenSymbols.length) : 0;
   const termRecall = relevantTermHits / Math.max(1, relevantTerms.length);
-  const hasPrecisionEvidence = (result.evidenceCount ?? 0) > 0 &&
-    [result.precisionAt1, result.precisionAt3, result.precisionAt10].some(Number.isFinite);
-  const precision = hasPrecisionEvidence
-    ? ((result.precisionAt1 ?? 0) + (result.precisionAt3 ?? 0) + (result.precisionAt10 ?? 0)) / 3
-    : 0;
-  const falsePositivePenalty = clamp(result.falsePositivePenalty ?? ((result.falsePositiveEvidenceCount ?? 0) / Math.max(10, result.evidenceCount ?? 0))) * 0.35;
-  const retrievalBase = hasPrecisionEvidence
-    ? (fileRecall + Math.max(symbolRecall, termRecall) + (result.topHit ?? 0) + precision) / 4
-    : (fileRecall + Math.max(symbolRecall, termRecall) + (result.topHit ?? 0)) / 3;
-  const retrieval = clamp(retrievalBase - falsePositivePenalty);
+  const retrieval = clamp((fileRecall + Math.max(symbolRecall, termRecall) + (result.topHit ?? 0)) / 3);
   const densityRaw = densityRawFor(result);
   const densityDenominator = context.maxDensityRawForTask ?? densityRaw;
   const density = densityDenominator > 0 ? clamp(densityRaw / densityDenominator) : 0;
@@ -193,8 +314,7 @@ export function scoreTask(result, task, context = {}) {
     (Math.min(result.structuralHits ?? 0, 6) / 6 * 0.5)
   );
   const freshness = scoreFreshness(result, task);
-  const capabilityHits = result.taskCapabilityHits ?? Object.keys(result.capabilityProofs ?? {}).length;
-  const capability = clamp(capabilityHits / Math.max(1, result.taskCapabilityExpected ?? 1));
+  const capability = clamp((result.taskCapabilityHits ?? 0) / Math.max(1, result.taskCapabilityExpected ?? 1));
   return { retrieval, density, runtime, depth, freshness, capability };
 }
 
@@ -212,6 +332,21 @@ export function scoreFreshness(result, task) {
       0.25 * (result.updatedResultEvidenceHit ?? 0) +
       0.25 * (result.manifestTransitionHit ?? 0)
     );
+  }
+  const expectedCapabilities = task.expectedCapabilities?.[result.arm] ?? [];
+  const relevantTerms = task.relevantTerms ?? [];
+  if (!String(result.arm ?? '').startsWith('zincgraph')) {
+    return 0;
+  }
+  const freshnessRelevant = expectedCapabilities.includes('freshness') ||
+    relevantTerms.some((term) => /fresh|stale|pending|manifest|sync|changed file|vector/i.test(String(term)));
+  if (freshnessRelevant) {
+    const expectedTerms = new Set([
+      ...relevantTerms.filter((term) => /fresh|stale|pending|manifest|sync|changed file|vector/i.test(String(term))),
+      ...FRESHNESS_TERMS
+    ]);
+    const hits = countHits([...expectedTerms], String(result.outputPreview ?? '').toLowerCase());
+    return clamp(hits / Math.max(1, Math.min(4, expectedTerms.size)));
   }
   return 0;
 }
@@ -277,13 +412,51 @@ export function qualityOnlyTotal(dimensionScores, weights = QUALITY_WEIGHTS) {
   return round2((weighted / denominator) * 100);
 }
 
+export function summarizeTaskCategories(tasks) {
+  const categories = new Map();
+  for (const task of tasks) {
+    const category = task.category ?? 'uncategorized';
+    const current = categories.get(category) ?? {
+      taskIds: new Set(),
+      arms: new Set(),
+      totalResults: 0,
+      applicableResults: 0,
+      passedResults: 0
+    };
+    current.taskIds.add(task.id);
+    if (task.arm) current.arms.add(task.arm);
+    current.totalResults += 1;
+    if (task.applicable !== false) {
+      current.applicableResults += 1;
+      if (task.status === 0) {
+        current.passedResults += 1;
+      }
+    }
+    categories.set(category, current);
+  }
+  return Object.fromEntries([...categories.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([category, value]) => [
+    category,
+    {
+      taskIds: [...value.taskIds].sort(),
+      arms: [...value.arms].sort(),
+      totalResults: value.totalResults,
+      applicableResults: value.applicableResults,
+      passedResults: value.passedResults
+    }
+  ]));
+}
+
 export function createReport(summary) {
   const armRows = Object.entries(summary.arms)
     .map(([name, arm]) => `| ${name} | ${arm.totalScore.toFixed(2)} | ${(arm.diagnosticTotalScore ?? arm.totalScore).toFixed(2)} | ${fmtScore(arm.dimensionScores.retrieval)} | ${fmtScore(arm.dimensionScores.depth)} | ${fmtScore(arm.dimensionScores.freshness)} | ${fmtScore(arm.dimensionScores.capability)} | ${fmtScore(arm.dimensionScores.density)} | ${fmtScore(arm.dimensionScores.runtime)} | ${arm.raw.medianLatencyMs} | ${arm.raw.totalOutputBytes} |`)
     .join('\n');
   const taskRows = summary.tasks
     .filter((task) => task.applicable !== false)
-    .map((task) => `| ${task.id} | ${task.arm} | ${task.status} | ${task.medianLatencyMs} | ${task.outputBytes} | ${task.scoredOutputBytes ?? task.outputBytes} | ${task.overflowOutputBytes ?? 0} | ${task.goldenFileHits}/${task.goldenFiles.length} | ${task.goldenSymbolHits}/${task.goldenSymbols.length} | ${task.relevantTermHits}/${task.relevantTerms.length} | ${fmtScore(task.precisionAt1 ?? 0)} | ${fmtScore(task.precisionAt3 ?? 0)} | ${fmtScore(task.precisionAt10 ?? 0)} | ${task.falsePositiveEvidenceCount ?? 0} | ${fmtScore(task.falsePositivePenalty ?? 0)} | ${fmtScore(task.scores.retrieval)} | ${fmtScore(task.scores.density)} |`)
+    .map((task) => `| ${task.id} | ${task.category ?? 'uncategorized'} | ${task.arm} | ${task.status} | ${task.medianLatencyMs} | ${task.outputBytes} | ${task.goldenFileHits}/${task.goldenFiles.length} | ${task.goldenSymbolHits}/${task.goldenSymbols.length} | ${task.relevantTermHits}/${task.relevantTerms.length} | ${fmtScore(task.scores.retrieval)} | ${fmtScore(task.scores.density)} |`)
+    .join('\n');
+  const categoryCoverage = summary.taskCategories ?? summarizeTaskCategories(summary.tasks ?? []);
+  const categoryRows = Object.entries(categoryCoverage)
+    .map(([category, value]) => `| ${category} | ${value.taskIds.length} | ${value.taskIds.join(', ')} | ${value.applicableResults} | ${value.passedResults} |`)
     .join('\n');
   const normalizationRows = Object.entries(summary.normalization ?? {})
     .map(([taskId, baseline]) => `| ${taskId} | ${baseline.densityDenominator} | ${baseline.bestMedianLatencyMs} | ${(baseline.applicablePrimaryArms ?? []).join(', ') || 'none'} | ${(baseline.successfulPrimaryArms ?? []).join(', ') || 'none'} |`)
@@ -330,10 +503,16 @@ ${qualityRows}
 
 Quality-only winner: ${qualityOnly.winner}
 
+## Benchmark category coverage
+
+| Category | Distinct tasks | Task ids | Applicable arm results | Passed arm results |
+|---|---:|---|---:|---:|
+${categoryRows || '| none | 0 | none | 0 | 0 |'}
+
 ## Raw task metrics
 
-| Task | Arm | Status | Median ms | Output bytes | Scored bytes | Overflow bytes | File hits | Symbol hits | Term hits | P@1 | P@3 | P@10 | False positives | FP penalty | Retrieval | Density |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Task | Category | Arm | Status | Median ms | Output bytes | File hits | Symbol hits | Term hits | Retrieval | Density |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
 ${taskRows}
 
 ## Normalization baselines
@@ -344,7 +523,7 @@ ${normalizationRows || '| none | 0 | 0 | none | none |'}
 
 ## Interpretation
 
-This is a **local deterministic benchmark**, not a universal headless-agent benchmark. It measures the installed CodeGraph and Zincgraph surfaces on a disposable copy of this repository, with exact scoring formulas from the PRD. CodeGraph remains the primary graph-speed baseline. Zincgraph can earn additional value through fusion, freshness, dedup/review, and wrapper capability. Per the user-corrected comparison, runtime/CLI latency and density/output size are diagnostic-only and excluded from the benchmark comparison score.
+This is a **local deterministic benchmark**, not a universal headless-agent benchmark. It measures the installed CodeGraph and Zincgraph surfaces on a disposable copy of this repository, with exact scoring formulas from the PRD. CodeGraph remains the primary graph-speed baseline. Zincgraph can earn additional value through fusion, freshness, dedup/review, compression feedback, semantic routing, cross-module context, and wrapper capability. Per the user-corrected comparison, runtime/CLI latency and density/output size are diagnostic-only and excluded from the benchmark comparison score.
 
 ## Preflight warnings
 
@@ -500,7 +679,7 @@ async function main() {
     const diff = diffFingerprints(before, after);
     const diagnosticTranscripts = persistDiagnosticTranscripts(tasks, resultDir);
     const summary = {
-      schemaVersion: 2,
+      schemaVersion: 1,
       generatedAt: new Date().toISOString(),
       confidence: 'local-deterministic',
       projectPath: sourceProjectPath,
@@ -511,6 +690,7 @@ async function main() {
       preflight,
       diagnosticTranscripts,
       normalization,
+      taskCategories: summarizeTaskCategories(tasks),
       arms,
       qualityOnly,
       tasks,
@@ -575,7 +755,7 @@ async function prepareBenchmarkProject(sourceProjectPath, resultDir) {
     const from = join(sourceProjectPath, name);
     if (existsSync(from)) cpSync(from, join(workspace, name));
   }
-  const init = runCommand(['node_modules/.bin/codegraph', 'init', workspace], ROOT, 120_000);
+  const init = runCommand([...CODEGRAPH_COMMAND, 'init', workspace], ROOT, 120_000);
   if (init.status !== 0) {
     throw new Error(`Failed to initialize CodeGraph benchmark workspace: ${init.stderr || init.stdout}`);
   }
@@ -608,13 +788,11 @@ export async function runBenchmarkTask(task, arm, commandSpec, projectPath, runs
       index,
       status,
       elapsedMs: t1 - t0,
-      scoringOutputParts: sequenceScoringOutput,
       scoringOutput: sequenceScoringOutput.join('\n'),
       diagnosticOutput: sequenceDiagnosticOutput.join('\n')
     });
   }
   const aggregate = aggregateRunRecords(runRecords);
-  const selectedRun = runRecords.find((record) => record.index === aggregate.selectedRunIndex);
   return attachRunAggregation(
     analyzeOutput({
       task,
@@ -622,7 +800,6 @@ export async function runBenchmarkTask(task, arm, commandSpec, projectPath, runs
       commandSpec,
       status: aggregate.status,
       output: aggregate.scoringOutput,
-      outputParts: selectedRun?.scoringOutputParts ?? [aggregate.scoringOutput],
       medianLatencyMs: aggregate.medianLatencyMs
     }),
     aggregate
@@ -751,35 +928,46 @@ async function runSingleIsolatedUpdateRun(arm, task, index = 0) {
   mkdirSync(srcDir, { recursive: true });
   await writeFile(join(fixture, 'package.json'), JSON.stringify({ name: 'zincgraph-benchmark-fixture', type: 'module' }, null, 2));
   await writeFile(join(srcDir, 'changed.ts'), 'export function existingLocalBenchmarkFunction() { return "old"; }\n');
-  const output = [];
+  const diagnosticOutput = [];
+  const scoringOutput = [];
   let status = 0;
   try {
-    const t0 = performance.now();
-    const init = runCommand(['node_modules/.bin/codegraph', 'init', fixture], ROOT, 90_000);
-    output.push(init.stdout, init.stderr);
+    const setupStart = performance.now();
+    let updateStart = setupStart;
+    const init = runCommand([...CODEGRAPH_COMMAND, 'init', fixture], ROOT, 90_000);
+    diagnosticOutput.push(init.stdout, init.stderr);
     status = init.status;
     if (status === 0 && arm === 'zincgraph-fusion') {
       const vectorize = runCommand(['node', 'dist/cli.js', 'vectorize', fixture], ROOT, 90_000);
-      output.push(vectorize.stdout, vectorize.stderr);
+      diagnosticOutput.push(vectorize.stdout, vectorize.stderr);
       status = vectorize.status;
     }
     if (status === 0) {
+      updateStart = performance.now();
       await appendFile(join(srcDir, 'changed.ts'), 'export function addedLocalBenchmarkFunction() { return "new"; }\n');
       const syncCommand = arm === 'codegraph'
-        ? ['node_modules/.bin/codegraph', 'sync', fixture]
+        ? [...CODEGRAPH_COMMAND, 'sync', fixture]
         : ['node', 'dist/cli.js', 'auto-sync', fixture, '--file', 'src/changed.ts'];
       const sync = runCommand(syncCommand, ROOT, 90_000);
-      output.push(sync.stdout, sync.stderr);
+      diagnosticOutput.push(sync.stdout, sync.stderr);
+      scoringOutput.push(sync.stdout, sync.stderr);
       status = sync.status;
       const queryCommand = arm === 'codegraph'
-        ? ['node_modules/.bin/codegraph', 'query', 'addedLocalBenchmarkFunction', '-p', fixture, '--json']
-        : ['node', 'dist/cli.js', 'search', 'addedLocalBenchmarkFunction', '-p', fixture, '--topk', '5', '--format', 'compact-json'];
+        ? [...CODEGRAPH_COMMAND, 'query', 'addedLocalBenchmarkFunction', '-p', fixture, '--json']
+        : ['node', 'dist/cli.js', 'search', 'addedLocalBenchmarkFunction', '-p', fixture, '--topk', '5'];
       const query = runCommand(queryCommand, ROOT, 90_000);
-      output.push(query.stdout, query.stderr);
+      diagnosticOutput.push(query.stdout, query.stderr);
+      scoringOutput.push(query.stdout, query.stderr);
       if (status === 0) status = query.status;
     }
     const t1 = performance.now();
-    return { index, status, elapsedMs: t1 - t0, output: output.join('\n') };
+    return {
+      index,
+      status,
+      elapsedMs: t1 - updateStart,
+      scoringOutput: scoringOutput.join('\n'),
+      diagnosticOutput: diagnosticOutput.join('\n')
+    };
   } finally {
     rmSync(fixture, { recursive: true, force: true });
   }
@@ -788,6 +976,7 @@ async function runSingleIsolatedUpdateRun(arm, task, index = 0) {
 function notApplicableTask(task, arm) {
   return {
     id: task.id,
+    category: task.category ?? 'uncategorized',
     arm,
     applicable: false,
     status: null,
@@ -802,14 +991,6 @@ function notApplicableTask(task, arm) {
     goldenSymbolHits: 0,
     relevantTermHits: 0,
     topHit: 0,
-    evidenceCount: 0,
-    precisionAt1: 0,
-    precisionAt3: 0,
-    precisionAt10: 0,
-    falsePositiveEvidenceCount: 0,
-    falsePositiveEvidence: [],
-    falsePositivePenalty: 0,
-    capabilityProofs: {},
     structuralHits: 0,
     freshnessTermHits: 0,
     freshnessCooccurrenceHits: 0,
@@ -825,66 +1006,34 @@ function notApplicableTask(task, arm) {
     successfulRunCount: 0,
     selectedRunIndex: null,
     diagnosticOutputBytes: 0,
-    scoredOutputBytes: 0,
-    overflowOutputBytes: 0,
-    scoringOutputCapBytes: SCORING_OUTPUT_CAP_BYTES,
     scores: zeroScores(),
     error: 'not_applicable'
   };
 }
 
-export function analyzeOutput({ task, arm, commandSpec, status, output, outputParts, medianLatencyMs }) {
-  const scoringOutputs = Array.isArray(outputParts) && outputParts.length > 0
-    ? outputParts.map((part) => String(part ?? ''))
-    : [String(output ?? '')];
-  const cappedScoringOutputs = normalizeScoringOutputs(scoringOutputs);
-  const cappedOutput = cappedScoringOutputs.join('\n');
-  const lower = cappedOutput.toLowerCase();
-  const top = cappedOutput.slice(0, Math.max(1, Math.floor(cappedOutput.length * 0.25))).toLowerCase();
+export function analyzeOutput({ task, arm, commandSpec, status, output, medianLatencyMs }) {
+  const lower = output.toLowerCase();
+  const top = output.slice(0, Math.max(1, Math.floor(output.length * 0.25))).toLowerCase();
   const goldenFiles = task.goldenFiles ?? [];
   const goldenSymbols = task.goldenSymbols ?? [];
   const relevantTerms = task.relevantTerms ?? [];
-  const evidence = capEvidenceItems(extractEvidenceItems(scoringOutputs));
-  const hasStructuredEvidence = evidence.length > 0;
-  const evidenceText = hasStructuredEvidence ? evidence.map((item) => item.text).join('\n').toLowerCase() : lower;
-  const fileHits = hasStructuredEvidence
-    ? countEvidenceHits(goldenFiles, evidence, 'filePath')
-    : countHits(goldenFiles, lower);
-  const symbolHits = hasStructuredEvidence
-    ? countEvidenceHits(goldenSymbols, evidence, 'qualifiedName')
-    : countHits(goldenSymbols, lower);
-  const termHits = countHits(relevantTerms, evidenceText);
-  const topHit = hasStructuredEvidence
-    ? (evidence[0] && evidenceItemRelevant(evidence[0], goldenFiles, goldenSymbols, relevantTerms) ? 1 : 0)
-    : ([...goldenFiles, ...goldenSymbols, ...relevantTerms].some((item) => top.includes(String(item).toLowerCase())) ? 1 : 0);
-  const precisionAt1 = precisionAt(evidence, 1, goldenFiles, goldenSymbols, relevantTerms);
-  const precisionAt3 = precisionAt(evidence, 3, goldenFiles, goldenSymbols, relevantTerms);
-  const precisionAt10 = precisionAt(evidence, 10, goldenFiles, goldenSymbols, relevantTerms);
-  const falsePositiveEvidence = hasStructuredEvidence
-    ? evidence.filter((item) => !evidenceItemRelevant(item, goldenFiles, goldenSymbols, relevantTerms))
-      .map((item) => evidenceLabel(item))
-    : [];
-  const falsePositivePenalty = round4(falsePositiveEvidence.length / Math.max(1, evidence.length));
+  const fileHits = countHits(goldenFiles, lower);
+  const symbolHits = countHits(goldenSymbols, lower);
+  const termHits = countHits(relevantTerms, lower);
+  const topHit = [...goldenFiles, ...goldenSymbols, ...relevantTerms].some((item) => top.includes(String(item).toLowerCase())) ? 1 : 0;
   const expectedCapabilityTags = task.expectedCapabilities?.[arm] ?? [];
-  const capabilityProofs = Object.fromEntries(expectedCapabilityTags.map((tag) => [
-    tag,
-    capabilityProven(tag, { task, arm, commandSpec, output: cappedOutput, evidence })
-  ]));
-  const capabilityTags = status === 0 ? expectedCapabilityTags.filter((tag) => capabilityProofs[tag]) : [];
-  const freshnessEvidenceText = hasStructuredEvidence ? evidence.map((item) => item.freshnessState ? `${item.text} ${item.freshnessState}` : item.text).join('\n') : cappedOutput;
-  const freshnessTermHits = task.id === 'freshness-manifest' ? countFreshnessTermHits(freshnessEvidenceText) : 0;
-  const freshnessCooccurrenceHits = task.id === 'freshness-manifest' ? countFreshnessCooccurrenceHits(freshnessEvidenceText) : 0;
+  const capabilityTags = status === 0 ? [...expectedCapabilityTags] : [];
+  const freshnessTermHits = task.id === 'freshness-manifest' ? countFreshnessTermHits(output) : 0;
+  const freshnessCooccurrenceHits = task.id === 'freshness-manifest' ? countFreshnessCooccurrenceHits(output) : 0;
   return {
     id: task.id,
+    category: task.category ?? 'uncategorized',
     arm,
     applicable: true,
     status,
     command: flattenCommandSpec(commandSpec).map((part) => part === '$PROJECT' ? 'PROJECT' : String(part)),
     medianLatencyMs,
     outputBytes: Buffer.byteLength(output),
-    scoredOutputBytes: Buffer.byteLength(cappedOutput),
-    overflowOutputBytes: Math.max(0, Buffer.byteLength(output) - Buffer.byteLength(cappedOutput)),
-    scoringOutputCapBytes: SCORING_OUTPUT_CAP_BYTES,
     goldenFiles,
     goldenSymbols,
     relevantTerms,
@@ -893,14 +1042,7 @@ export function analyzeOutput({ task, arm, commandSpec, status, output, outputPa
     goldenSymbolHits: symbolHits,
     relevantTermHits: termHits,
     topHit,
-    evidenceCount: evidence.length,
-    precisionAt1,
-    precisionAt3,
-    precisionAt10,
-    falsePositiveEvidenceCount: falsePositiveEvidence.length,
-    falsePositiveEvidence,
-    falsePositivePenalty,
-    structuralHits: countHits(STRUCTURAL_TERMS, evidenceText),
+    structuralHits: countHits(STRUCTURAL_TERMS, lower),
     freshnessTermHits,
     freshnessTermsExpected: 4,
     freshnessCooccurrenceHits,
@@ -909,7 +1051,6 @@ export function analyzeOutput({ task, arm, commandSpec, status, output, outputPa
     manifestTransitionHit: 0,
     capabilityTags,
     expectedCapabilityTags,
-    capabilityProofs,
     taskCapabilityHits: capabilityTags.filter((tag) => expectedCapabilityTags.includes(tag)).length,
     taskCapabilityExpected: Math.max(1, expectedCapabilityTags.length),
     densityRaw: 0,
@@ -917,280 +1058,6 @@ export function analyzeOutput({ task, arm, commandSpec, status, output, outputPa
     outputPreview: output.slice(0, OUTPUT_PREVIEW_BYTES),
     error: status === 0 ? null : output.slice(0, OUTPUT_PREVIEW_BYTES)
   };
-}
-
-function normalizeScoringOutputs(outputParts, output) {
-  const parts = Array.isArray(outputParts) && outputParts.length > 0 ? outputParts.map((part) => String(part ?? '')) : [String(output ?? '')];
-  const separatorBytes = Math.max(0, parts.length - 1);
-  const perPartCap = Math.max(1, Math.floor(Math.max(1, SCORING_OUTPUT_CAP_BYTES - separatorBytes) / parts.length));
-  return parts.map((part) => capOutput(part, perPartCap));
-}
-
-function capOutput(output, maxBytes = SCORING_OUTPUT_CAP_BYTES) {
-  const text = String(output ?? '');
-  const bytes = Buffer.byteLength(text);
-  if (bytes <= maxBytes) {
-    return text;
-  }
-  return Buffer.from(text).subarray(0, maxBytes).toString('utf8');
-}
-
-function extractEvidenceItems(outputs) {
-  const items = [];
-  const parts = Array.isArray(outputs) ? outputs : [outputs];
-  for (const part of parts) {
-    const text = String(part ?? '').trim();
-    if (!text) {
-      continue;
-    }
-    const parsed = parseJsonOutput(text);
-    if (parsed === null) {
-      const fallback = normalizeTextEvidenceItem(text);
-      if (fallback) {
-        items.push({ ...fallback, rank: items.length });
-        if (items.length >= SCORE_EVIDENCE_LIMIT) {
-          return items;
-        }
-      }
-      continue;
-    }
-    const parsedItems = [];
-    collectEvidenceItems(parsed, parsedItems);
-    if (parsedItems.length === 0) {
-      const fallback = normalizeEvidenceItem(parsed, 0);
-      if (fallback) {
-        parsedItems.push(fallback);
-      }
-    }
-    for (const item of parsedItems) {
-      items.push({ ...item, rank: items.length });
-      if (items.length >= SCORE_EVIDENCE_LIMIT) {
-        return items;
-      }
-    }
-  }
-  return items;
-}
-
-function capEvidenceItems(items) {
-  if (items.length === 0) {
-    return items;
-  }
-  const perItemCap = Math.max(1, Math.floor(SCORING_OUTPUT_CAP_BYTES / items.length));
-  return items.map((item, index) => ({
-    ...item,
-    rank: index,
-    text: capOutput(item.text, perItemCap)
-  }));
-}
-
-function parseJsonOutput(output) {
-  const text = String(output ?? '').trim();
-  if (!text) {
-    return null;
-  }
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
-}
-
-function collectEvidenceItems(value, items) {
-  if (!value || typeof value !== 'object') {
-    return;
-  }
-  if (Array.isArray(value)) {
-    for (const entry of value) {
-      const item = normalizeEvidenceItem(entry);
-      if (item) {
-        items.push(item);
-      } else {
-        collectEvidenceItems(entry, items);
-      }
-    }
-    return;
-  }
-  if (value.upstream && typeof value.upstream === 'object') {
-    const before = items.length;
-    collectEvidenceItems(value.upstream, items);
-    if (items.length > before) {
-      return;
-    }
-  }
-  if (Array.isArray(value.evidenceUnits)) {
-    for (const entry of value.evidenceUnits) {
-      const item = normalizeEvidenceItem(entry);
-      if (item) {
-        items.push(item);
-      }
-    }
-    return;
-  }
-  if (Array.isArray(value.results)) {
-    for (const entry of value.results) {
-      const item = normalizeEvidenceItem(entry);
-      if (item) items.push(item);
-    }
-    return;
-  }
-  if (Array.isArray(value.nodes)) {
-    for (const entry of value.nodes) {
-      const item = normalizeEvidenceItem(entry);
-      if (item) items.push(item);
-    }
-    return;
-  }
-  const item = normalizeEvidenceItem(value);
-  if (item) {
-    items.push(item);
-  }
-}
-
-function normalizeEvidenceItem(value) {
-  if (!value || typeof value !== 'object') {
-    return null;
-  }
-  const record = value.node && typeof value.node === 'object' ? value.node : value;
-  const filePath = stringField(record.filePath ?? record.file_path ?? record.path);
-  const qualifiedName = stringField(record.qualifiedName ?? record.qualified_name ?? record.name ?? record.symbol);
-  const kind = stringField(record.kind);
-  const freshnessState = stringField(record.freshnessState ?? record.freshness_state);
-  const sources = Array.isArray(record.sources) ? record.sources.filter((source) => typeof source === 'string') : [];
-  const primitiveSummary = Object.entries(record)
-    .filter(([key, itemValue]) => {
-      if (['filePath', 'file_path', 'path', 'qualifiedName', 'qualified_name', 'name', 'symbol', 'kind', 'freshnessState', 'freshness_state', 'sources', 'content', 'signature', 'docstring', 'preview', 'excerpt', 'signalText', 'text', 'label'].includes(key)) {
-        return false;
-      }
-      return isPrimitiveEvidenceValue(itemValue);
-    })
-    .slice(0, 8)
-    .map(([key, itemValue]) => `${key}:${serializePrimitiveEvidenceValue(itemValue)}`)
-    .join(' ');
-  const selected = {
-    filePath,
-    qualifiedName,
-    kind,
-    freshnessState,
-    sources,
-    content: stringField(record.content ?? record.signature ?? record.docstring ?? record.preview ?? record.excerpt ?? record.signalText ?? record.text ?? record.label ?? primitiveSummary)
-  };
-  const text = JSON.stringify(selected);
-  if (!filePath && !qualifiedName && !selected.content && !primitiveSummary) {
-    return null;
-  }
-  return { filePath, qualifiedName, kind, freshnessState, sources, text };
-}
-
-function isPrimitiveEvidenceValue(value) {
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-    return true;
-  }
-  return Array.isArray(value) && value.every((entry) => typeof entry === 'string' || typeof entry === 'number' || typeof entry === 'boolean');
-}
-
-function serializePrimitiveEvidenceValue(value) {
-  if (Array.isArray(value)) {
-    return value.map((entry) => String(entry)).join(',');
-  }
-  return String(value);
-}
-
-function normalizeTextEvidenceItem(text) {
-  const normalized = String(text ?? '').trim();
-  if (!normalized) {
-    return null;
-  }
-  return {
-    filePath: '',
-    qualifiedName: '',
-    kind: '',
-    freshnessState: '',
-    sources: [],
-    text: normalized
-  };
-}
-
-function stringField(value) {
-  return typeof value === 'string' ? value : '';
-}
-
-function countEvidenceHits(items, evidence, field) {
-  const hits = new Set();
-  for (const item of items) {
-    const expected = String(item).toLowerCase();
-    if (!expected) continue;
-    if (evidence.some((entry) => String(entry[field] ?? '').toLowerCase().includes(expected) || entry.text.toLowerCase().includes(expected))) {
-      hits.add(expected);
-    }
-  }
-  return hits.size;
-}
-
-function precisionAt(evidence, k, goldenFiles, goldenSymbols, relevantTerms) {
-  if (evidence.length === 0) {
-    return 0;
-  }
-  const sample = evidence.slice(0, k);
-  if (sample.length === 0) {
-    return 0;
-  }
-  return sample.filter((item) => evidenceItemRelevant(item, goldenFiles, goldenSymbols, relevantTerms)).length / k;
-}
-
-function evidenceItemRelevant(item, goldenFiles, goldenSymbols, relevantTerms) {
-  if (goldenFiles.length === 0 && goldenSymbols.length === 0 && relevantTerms.length === 0) {
-    return true;
-  }
-  const text = item.text.toLowerCase();
-  return goldenFiles.some((expected) => matchesExpected(item.filePath, expected) || text.includes(String(expected).toLowerCase())) ||
-    goldenSymbols.some((expected) => matchesExpected(item.qualifiedName, expected) || text.includes(String(expected).toLowerCase())) ||
-    relevantTerms.some((expected) => text.includes(String(expected).toLowerCase()));
-}
-
-function matchesExpected(actual, expected) {
-  const left = String(actual ?? '').toLowerCase();
-  const right = String(expected ?? '').toLowerCase();
-  return Boolean(left && right && (left === right || left.endsWith(`/${right}`) || left.includes(right)));
-}
-
-function evidenceLabel(item) {
-  return [item.filePath, item.qualifiedName || item.kind].filter(Boolean).join('::') || item.signalText?.slice(0, 80) || item.text.slice(0, 80);
-}
-
-function capabilityProven(tag, context) {
-  const lower = context.output.toLowerCase();
-  const evidence = context.evidence;
-  const evidenceText = evidence.map((item) => item.text).join('\n').toLowerCase();
-  switch (tag) {
-    case 'graph':
-      return evidence.some((item) => item.filePath || item.qualifiedName || item.kind) || /\b(caller|callee|calls|edge|node|filepath|qualifiedname)\b/i.test(context.output);
-    case 'graph-delegation':
-      return evidence.some((item) => item.sources.includes('graph') && (item.sources.includes('vector') || item.sources.includes('fts') || item.sources.length > 1)) ||
-        /"delegated"\s*:\s*true/i.test(lower) ||
-        evidenceText.includes('delegated:true');
-    case 'fusion':
-      return evidence.some((item) => item.sources.length >= 2 || (item.sources.includes('graph') && (item.sources.includes('vector') || item.sources.includes('fts')))) ||
-        evidenceText.includes('textbranch:fusion-store-token-overlap') ||
-        evidenceText.includes('textbranch:headroom-relevance') ||
-        evidenceText.includes('nativefts:');
-    case 'freshness':
-      return lower.includes('freshness') || lower.includes('"fresh"') || lower.includes('"stale"') || evidence.some((item) => item.freshnessState);
-    case 'mcp':
-      return evidenceText.includes('mcp') || evidenceText.includes('tool registry') || evidenceText.includes('zincgraph_semantic_search') || evidenceText.includes('zincgraph_dedup_check');
-    case 'dedup':
-      return lower.includes('dedup') || evidenceText.includes('dedup');
-    case 'review':
-      return lower.includes('review') || evidenceText.includes('review');
-    case 'delegation':
-      return /"delegated"\s*:\s*true/i.test(lower) || evidenceText.includes('delegated:true') || capabilityProven('graph-delegation', context) || capabilityProven('fusion', context);
-    case 'index':
-      return /\b(initialized|filecount|nodecount|edgecount|languages)\b/i.test(context.output);
-    case 'update':
-      return lower.includes('sync') || lower.includes('updated') || lower.includes('transition') || lower.includes('addedlocalbenchmarkfunction');
-    default:
-      return lower.includes(String(tag).toLowerCase()) || evidenceText.includes(String(tag).toLowerCase());
-  }
 }
 
 function countHits(items, lowerOutput) {
@@ -1276,11 +1143,11 @@ function flattenCommandSpec(spec) {
 }
 
 function expandCommand(command, projectPath) {
-  return command.map((part) => {
-    if (part === '$PROJECT') return projectPath;
-    if (part === 'dist/cli.js') return ZINCGRAPH_CLI;
-    if (part === 'node_modules/.bin/codegraph') return CODEGRAPH_BIN;
-    return part;
+  return command.flatMap((part) => {
+    if (part === '$PROJECT') return [projectPath];
+    if (part === 'dist/cli.js') return [ZINCGRAPH_CLI];
+    if (part === 'node_modules/.bin/codegraph') return CODEGRAPH_COMMAND;
+    return [part];
   });
 }
 
@@ -1306,7 +1173,7 @@ function runCommand(command, cwd, timeout = 60_000) {
   };
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((error) => {
     console.error(error instanceof Error ? error.stack || error.message : String(error));
     process.exitCode = 1;

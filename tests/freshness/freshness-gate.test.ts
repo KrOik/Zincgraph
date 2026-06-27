@@ -11,6 +11,7 @@ import { DEFAULT_CHUNKER_VERSION } from '../../src/vector/chunker.js';
 
 const tempProjects: string[] = [];
 const profile = 'local-token-v1:64';
+const manifestStores: VectorManifestStore[] = [];
 const FRESHNESS_SQLITE_TEST_TIMEOUT_MS = 30_000;
 
 function tempProject(): string {
@@ -19,7 +20,16 @@ function tempProject(): string {
   return project;
 }
 
+function createManifest(project: string): VectorManifestStore {
+  const store = new VectorManifestStore(new FusionStore(project), profile);
+  manifestStores.push(store);
+  return store;
+}
+
 afterEach(() => {
+  for (const store of manifestStores.splice(0)) {
+    store.close();
+  }
   for (const project of tempProjects.splice(0)) {
     rmSync(project, { force: true, recursive: true });
   }
@@ -47,8 +57,7 @@ describe('Phase 2 freshness gate', () => {
 
   test('sync callback can restore review readiness', async () => {
     const project = tempProject();
-    const store = new FusionStore(project);
-    const manifest = new VectorManifestStore(store, profile);
+    const manifest = createManifest(project);
     manifest.markStale('src/a.ts', 'h2');
     const gate = new FreshnessGate(project, profile);
     const result = await gate.ensureReady({
@@ -63,8 +72,8 @@ describe('Phase 2 freshness gate', () => {
 
   test('current freshness ignores old v1 manifest entries after chunker bump', () => {
     const project = tempProject();
-    const store = new FusionStore(project);
-    const oldManifest = new VectorManifestStore(store, profile, 'codegraph-node-v1');
+    const oldManifest = new VectorManifestStore(new FusionStore(project), profile, 'codegraph-node-v1');
+    manifestStores.push(oldManifest);
     oldManifest.markFresh('src/a.ts', 'h1', ['old-doc']);
     const freshness = getFreshnessSnapshot(project, profile);
     expect(DEFAULT_CHUNKER_VERSION).not.toBe('codegraph-node-v1');
@@ -75,8 +84,7 @@ describe('Phase 2 freshness gate', () => {
 
   test('force bypasses stale blocking', async () => {
     const project = tempProject();
-    const store = new FusionStore(project);
-    const manifest = new VectorManifestStore(store, profile);
+    const manifest = createManifest(project);
     manifest.markStale('src/a.ts', 'h2');
     const result = await new FreshnessGate(project, profile).ensureReady({ force: true });
     expect(result.forced).toBe(true);
@@ -85,8 +93,7 @@ describe('Phase 2 freshness gate', () => {
 
   test('sync failure reports index-not-fresh warning', async () => {
     const project = tempProject();
-    const store = new FusionStore(project);
-    const manifest = new VectorManifestStore(store, profile);
+    const manifest = createManifest(project);
     manifest.markStale('src/a.ts', 'h2');
     const result = await new FreshnessGate(project, profile).ensureReady({
       sync: () => {

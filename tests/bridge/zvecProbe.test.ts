@@ -23,7 +23,7 @@ describe('Zvec Phase 0 probe', () => {
     const assessment = assessZvecNativeWrapper();
 
     expect(assessment.available).toBe(true);
-    expect(assessment.cApiHeader).toContain('refer/zvec/src/include/zvec/c_api.h');
+    expect(assessment.cApiHeader.replaceAll('\\', '/')).toContain('refer/zvec/src/include/zvec/c_api.h');
     expect(assessment.estimatedEffort).toBe('2+ weeks');
     expect(assessment.requiredExports).toContain('zvec_initialize');
   });

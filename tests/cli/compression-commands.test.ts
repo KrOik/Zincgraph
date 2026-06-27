@@ -61,6 +61,25 @@ describe('CLI compression commands', () => {
     expect(cmd).toBeDefined();
   });
 
+  test('compression-stats returns zeroed session stats for a fresh project', async () => {
+    const output = await runCli(['compression-stats', tempDir]);
+    const parsed = JSON.parse(output.trim());
+
+    expect(parsed.ccrStore).toMatchObject({
+      entryCount: 0,
+      totalContentBytes: 0,
+      totalRetrievals: 0
+    });
+    expect(parsed.session).toMatchObject({
+      totalCompressions: 0,
+      totalTokensBefore: 0,
+      totalTokensAfter: 0,
+      totalTokensSaved: 0,
+      averageCompressionRatio: 0,
+      retrievalCount: 0
+    });
+  });
+
   test('config command exists with get/set actions', () => {
     const program = buildCli();
     const cmd = program.commands.find((c) => c.name() === 'config');
@@ -85,22 +104,27 @@ describe('CLI compression commands', () => {
   test('retrieve records project feedback for known hashes', async () => {
     const ccrStore = new CcrStore({ projectPath: tempDir });
     const feedbackStore = new FeedbackStore({ projectPath: tempDir });
-    ccrStore.put('hash-1', 'original content', 'text');
-    feedbackStore.recordCompression({
-      hash: 'hash-1',
-      nodeId: 'node-1',
-      source: 'graph',
-      contentType: 'text',
-      kind: 'function',
-      compressedAt: Date.now()
-    });
+    try {
+      ccrStore.put('hash-1', 'original content', 'text');
+      feedbackStore.recordCompression({
+        hash: 'hash-1',
+        nodeId: 'node-1',
+        source: 'graph',
+        contentType: 'text',
+        kind: 'function',
+        compressedAt: Date.now()
+      });
 
-    const output = await runCli(['retrieve', 'hash-1', tempDir]);
-    expect(output).toContain('original content');
+      const output = await runCli(['retrieve', 'hash-1', tempDir]);
+      expect(output).toContain('original content');
 
-    const retrievals = feedbackStore.listRetrievalEvents();
-    expect(retrievals).toHaveLength(1);
-    expect(retrievals[0]?.hash).toBe('hash-1');
-    expect(retrievals[0]?.queryContext).toBe('');
-  });
+      const retrievals = feedbackStore.listRetrievalEvents();
+      expect(retrievals).toHaveLength(1);
+      expect(retrievals[0]?.hash).toBe('hash-1');
+      expect(retrievals[0]?.queryContext).toBe('');
+    } finally {
+      ccrStore.close();
+      feedbackStore.close();
+    }
+  }, 15_000);
 });

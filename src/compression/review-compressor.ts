@@ -102,6 +102,10 @@ export class PersistentCrossTurnContextTracker extends CrossTurnContextTracker {
     super.clear();
     this.store.clearReviewSignatures();
   }
+
+  close(): void {
+    this.store.close();
+  }
 }
 
 export function findingSignature(finding: GraphReviewFinding): string {
@@ -200,6 +204,7 @@ export class ReviewCompressor {
   private readonly ccrStore: CcrStore;
   private readonly feedbackLoop: CompressionFeedbackLoop | undefined;
   private readonly tracker: CrossTurnContextTracker | undefined;
+  private closed = false;
 
   constructor(options: ReviewCompressorOptions) {
     this.ccrStore = options.ccrStore;
@@ -307,6 +312,17 @@ export class ReviewCompressor {
 
   format(result: ReviewCompressionResult): string[] {
     return formatReviewCompressionResult(result);
+  }
+
+  close(): void {
+    if (this.closed) {
+      return;
+    }
+    this.closed = true;
+    const tracker = this.tracker as { close?: () => void } | undefined;
+    tracker?.close?.();
+    this.feedbackLoop?.close();
+    this.ccrStore.close();
   }
 }
 

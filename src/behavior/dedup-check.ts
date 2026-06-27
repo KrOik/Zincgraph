@@ -1,6 +1,7 @@
 import { FusionStore } from '../freshness/fusion-store.js';
-import { openCollection, type CodeVectorCollection } from '../vector/collection-manager.js';
+import { openCollection, type CodeVectorCollection, type CodeVectorCollectionOptions } from '../vector/collection-manager.js';
 import { DEFAULT_CHUNKER_VERSION } from '../vector/chunker.js';
+import { resolveActiveEmbedding, type ResolvedEmbeddingConfig } from '../vector/embedding/config.js';
 import { tokenizeCodeText } from '../vector/embedding/local.js';
 import type { VectorDocument } from '../vector/code-to-vectors.js';
 import type { VectorSearchResult } from '../vector/zvec-adapter.js';
@@ -36,7 +37,7 @@ export interface DedupCheckResult {
 }
 
 export interface DedupCheckerDependencies {
-  search(description: string, topk: number): Promise<readonly DedupCandidate[]>;
+  search(description: string, topk: number, threshold?: number): Promise<readonly DedupCandidate[]>;
 }
 
 export interface RunDedupCheckOptions {
@@ -47,8 +48,15 @@ export interface RunDedupCheckOptions {
   checker?: Pick<DedupChecker, 'check'>;
 }
 
-export type DedupCollectionOpener = (projectPath: string) => Pick<CodeVectorCollection, 'query' | 'destroy'>;
-export type DedupDocumentLister = (projectPath: string) => readonly VectorDocument[];
+export type DedupCollectionOpener = (
+  projectPath: string,
+  options?: CodeVectorCollectionOptions
+) => Pick<CodeVectorCollection, 'query' | 'destroy'>;
+export type DedupDocumentLoader = (
+  projectPath: string,
+  nodeIds: readonly string[],
+  embedding?: Pick<ResolvedEmbeddingConfig, 'profile' | 'chunkerVersion'>
+) => readonly VectorDocument[];
 
 export class DedupChecker {
   readonly threshold: number;
@@ -67,7 +75,7 @@ export class DedupChecker {
     const threshold = request.threshold ?? this.threshold;
     validateThreshold(threshold);
     const topk = request.topk ?? DEFAULT_DEDUP_TOPK;
-    const candidates = await this.dependencies.search(description, Math.max(topk, DEFAULT_DEDUP_TOPK));
+    const candidates = await this.dependencies.search(description, Math.max(topk, DEFAULT_DEDUP_TOPK), threshold);
     const matches = candidates
       .filter((candidate) => Number.isFinite(candidate.score) && candidate.score >= threshold)
       .sort((left, right) => right.score - left.score)
@@ -83,7 +91,6 @@ export class DedupChecker {
 
 export function formatDedupResult(result: DedupCheckResult): string {
   const lines = [
-    'checkType: dedup-check',
     result.recommendation.message,
     `threshold=${result.threshold}`,
     `matches=${result.matches.length}`
@@ -136,23 +143,38 @@ function defaultDependencies(projectPath: string): DedupCheckerDependencies {
 export function createVectorDedupSearch(
   projectPath: string,
   open: DedupCollectionOpener = openCollection,
-  listDocuments: DedupDocumentLister = listVectorDocuments
+  loadDocuments: DedupDocumentLoader = loadVectorDocumentsByNodeIds
 ): DedupCheckerDependencies['search'] {
   return {
-    async search(description: string, topk: number): Promise<DedupCandidate[]> {
+    async search(description: string, topk: number, threshold = DEFAULT_DEDUP_THRESHOLD): Promise<DedupCandidate[]> {
       const queryTokens = new Set(tokenizeCodeText(description));
       if (queryTokens.size === 0) {
         return [];
       }
-      const collection = open(projectPath);
+      const embedding = resolveActiveEmbedding(projectPath);
+      const collection = open(projectPath, {
+        embeddingProfile: embedding.profile,
+        chunkerVersion: embedding.chunkerVersion,
+        queryAdapter: embedding.adapter
+      });
       try {
-        const documentsByNode = new Map(listDocuments(projectPath).map((document) => [document.nodeId, document]));
-        const results = await collection.query([{ text: description }], topk);
-        return results
-          .filter((result) => result.chunkerVersion === DEFAULT_CHUNKER_VERSION)
-          .map((result) => vectorResultToCandidate(result, queryTokens, documentsByNode.get(result.nodeId)))
-          .sort((left, right) => right.score - left.score)
-          .slice(0, topk);
+        const results = await collection.query([{ text: description, mode: 'dense' }], topk);
+        const currentResults = results.filter((result) => result.chunkerVersion === embedding.chunkerVersion);
+        const hydrationThreshold = Math.min(0.3, threshold);
+        const nodeIdsToHydrate = currentResults
+          .filter((result) => {
+            const vectorScore = normalizeVectorScore(result.score);
+            if (vectorScore < threshold) {
+              return false;
+            }
+            return metadataTokenSimilarity(queryTokens, result) < hydrationThreshold;
+          })
+          .map((result) => result.nodeId);
+        const documentsByNode = new Map(
+          loadDocuments(projectPath, nodeIdsToHydrate, embedding)
+            .map((document) => [document.nodeId, document])
+        );
+        return currentResults.map((result) => vectorResultToCandidate(result, queryTokens, documentsByNode.get(result.nodeId)));
       } finally {
         collection.destroy();
       }
@@ -160,11 +182,15 @@ export function createVectorDedupSearch(
   }.search;
 }
 
-function listVectorDocuments(projectPath: string): VectorDocument[] {
+function loadVectorDocumentsByNodeIds(
+  projectPath: string,
+  nodeIds: readonly string[],
+  embedding: Pick<ResolvedEmbeddingConfig, 'profile' | 'chunkerVersion'> = resolveActiveEmbedding(projectPath)
+): VectorDocument[] {
   const store = new FusionStore(projectPath);
   try {
-    return store.listVectorDocuments()
-      .map((stored) => asVectorDocument(stored.json))
+    return store.getVectorDocumentsByNodeIds(nodeIds, embedding.profile, embedding.chunkerVersion)
+      .map((stored) => asVectorDocument(stored.json, embedding.chunkerVersion))
       .filter((document): document is VectorDocument => document !== null);
   } finally {
     store.close();
@@ -188,7 +214,7 @@ function vectorResultToCandidate(
   };
 }
 
-function asVectorDocument(value: unknown): VectorDocument | null {
+function asVectorDocument(value: unknown, chunkerVersion = DEFAULT_CHUNKER_VERSION): VectorDocument | null {
   if (!value || typeof value !== 'object') {
     return null;
   }
@@ -201,7 +227,7 @@ function asVectorDocument(value: unknown): VectorDocument | null {
     typeof candidate.qualifiedName === 'string' &&
     typeof candidate.content === 'string' &&
     typeof candidate.contentHash === 'string' &&
-    candidate.chunkerVersion === DEFAULT_CHUNKER_VERSION
+    candidate.chunkerVersion === chunkerVersion
   ) {
     return {
       id: typeof candidate.id === 'string' ? candidate.id : candidate.nodeId,
@@ -233,6 +259,21 @@ function conservativeTokenSimilarity(queryTokens: ReadonlySet<string>, document:
   const overlap = [...queryTokens].filter((token) => documentTokens.has(token)).length;
   const coverage = overlap / queryTokens.size;
   const precision = overlap / Math.min(documentTokens.size, Math.max(queryTokens.size, 1));
+  return Math.min(1, (coverage + precision) / 2);
+}
+
+function metadataTokenSimilarity(queryTokens: ReadonlySet<string>, result: VectorSearchResult): number {
+  const metadataTokens = new Set([
+    ...tokenizeCodeText(result.qualifiedName),
+    ...tokenizeCodeText(result.filePath),
+    ...tokenizeCodeText(result.kind)
+  ]);
+  if (metadataTokens.size === 0) {
+    return 0;
+  }
+  const overlap = [...queryTokens].filter((token) => metadataTokens.has(token)).length;
+  const coverage = overlap / queryTokens.size;
+  const precision = overlap / Math.min(metadataTokens.size, Math.max(queryTokens.size, 1));
   return Math.min(1, (coverage + precision) / 2);
 }
 

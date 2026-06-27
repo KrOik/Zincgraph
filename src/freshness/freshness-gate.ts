@@ -1,6 +1,7 @@
 import { FusionStore } from './fusion-store.js';
 import { SemanticStatus } from './semantic-status.js';
 import { VectorManifestStore, type ManifestSummary, type VectorManifestEntry } from './manifest.js';
+import { defaultLocalEmbeddingProfile, resolveActiveEmbedding, type ActiveEmbeddingConfigInput } from '../vector/embedding/index.js';
 
 export interface FreshnessSnapshot extends ManifestSummary {
   isFresh: boolean;
@@ -21,7 +22,7 @@ export interface FreshnessGateResult {
   warnings: string[];
 }
 
-export const DEFAULT_FRESHNESS_EMBEDDING_PROFILE = 'local-token-v1:64';
+export const DEFAULT_FRESHNESS_EMBEDDING_PROFILE = defaultLocalEmbeddingProfile();
 
 export function summarizeFreshness(entries: readonly VectorManifestEntry[]): FreshnessSnapshot {
   const semanticStatus = new SemanticStatus(entries);
@@ -37,11 +38,14 @@ export function summarizeFreshness(entries: readonly VectorManifestEntry[]): Fre
 
 export function getFreshnessSnapshot(
   projectPath: string,
-  embeddingProfile = DEFAULT_FRESHNESS_EMBEDDING_PROFILE
+  embedding: string | ActiveEmbeddingConfigInput = DEFAULT_FRESHNESS_EMBEDDING_PROFILE
 ): FreshnessSnapshot {
+  const resolved = typeof embedding === 'string'
+    ? { profile: embedding, chunkerVersion: undefined }
+    : resolveActiveEmbedding(projectPath, embedding);
   const store = new FusionStore(projectPath);
   try {
-    const manifest = new VectorManifestStore(store, embeddingProfile);
+    const manifest = new VectorManifestStore(store, resolved.profile, resolved.chunkerVersion);
     return summarizeFreshness(manifest.entries());
   } finally {
     store.close();
@@ -49,13 +53,17 @@ export function getFreshnessSnapshot(
 }
 
 export class FreshnessGate {
+  private readonly embedding: string | ActiveEmbeddingConfigInput;
+
   constructor(
     private readonly projectPath: string,
-    private readonly embeddingProfile = DEFAULT_FRESHNESS_EMBEDDING_PROFILE
-  ) {}
+    embedding: string | ActiveEmbeddingConfigInput = DEFAULT_FRESHNESS_EMBEDDING_PROFILE
+  ) {
+    this.embedding = embedding;
+  }
 
   status(): FreshnessSnapshot {
-    return getFreshnessSnapshot(this.projectPath, this.embeddingProfile);
+    return getFreshnessSnapshot(this.projectPath, this.embedding);
   }
 
   async ensureReady(options: FreshnessGateOptions = {}): Promise<FreshnessGateResult> {

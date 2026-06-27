@@ -3,8 +3,10 @@ import { defineConfig } from 'tsup';
 export default defineConfig({
   entry: {
     index: 'src/index.ts',
-    cli: 'src/cli.ts',
+    cli: 'src/fast-cli.ts',
+    'cli-full': 'src/cli.ts',
     'vector/collection-manager': 'src/vector/collection-manager.ts',
+    'vector/codegraph-snapshot': 'src/vector/codegraph-snapshot.ts',
     'vector/zvec-adapter': 'src/vector/zvec-adapter.ts',
     'vector/code-to-vectors': 'src/vector/code-to-vectors.ts',
     'vector/vectorize-command': 'src/vector/vectorize-command.ts',
@@ -61,11 +63,12 @@ export default defineConfig({
   format: ['esm', 'cjs'],
   platform: 'node',
   target: 'es2022',
+  removeNodeProtocol: false,
   external: ['node:sqlite', 'tree-sitter-wasms', 'web-tree-sitter'],
   dts: true,
   sourcemap: true,
   clean: true,
-  splitting: false,
+  splitting: true,
   shims: true,
   async onSuccess() {
     const { mkdirSync, writeFileSync } = await import('node:fs');

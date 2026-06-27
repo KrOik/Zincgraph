@@ -15,6 +15,7 @@ import { runDedupCommand as defaultRunDedupCommand, type DedupCommandResult } fr
 import { CcrStore } from '../compression/ccr-store.js';
 import { createProjectFusionCompressor } from '../compression/fusion-compressor.js';
 import { TopoSemanticQueryEngine, type ContextCapsule } from '../fusion/query-engine.js';
+import { summarizeContextCapsule } from '../fusion/context-summary.js';
 import type { CompressionStats } from '../compression/fusion-compressor.js';
 import { compressContentLocal } from '../bridge/headroomAdapter.js';
 import { CompressionFeedbackLoop, recordRetrievalFeedback } from '../compression/feedback-loop.js';
@@ -48,6 +49,7 @@ export interface ZincgraphToolRegistryDependencies {
 export interface ZincgraphToolRegistry {
   tools: ZincgraphToolDefinition[];
   callTool(name: string, args?: ToolArguments): Promise<CallToolResult>;
+  close(): void;
 }
 
 export interface FusionEngineLike {
@@ -153,7 +155,8 @@ export function listZincgraphTools(): ZincgraphToolDefinition[] {
       query: QUERY_PROPERTY,
       project: PROJECT_PROPERTY,
       topk: TOPK_PROPERTY,
-      maxTokens: { type: 'number', description: 'Context token budget.' }
+      maxTokens: { type: 'number', description: 'Context token budget.' },
+      full: { type: 'boolean', description: 'Return the full ContextCapsule instead of the compact summary.' }
     }, ['query']),
     fusionTool('zincgraph_dedup_check', 'Check whether proposed behavior duplicates existing code semantically.', {
       describe: { type: 'string', description: 'Behavior/functionality to add.' },
@@ -239,7 +242,7 @@ export function createZincgraphToolRegistry(
             applyFeedbackAwarePolicy(engine, projectPath);
           }
           const result = await engine.search(requiredString(args, 'query'), fusionOptions(args));
-          return jsonResult(result);
+          return jsonResult(args.full === true ? result : summarizeContextCapsule(result));
         }
         case 'zincgraph_dedup_check': {
           const dedupOptions: { projectPath?: string; describe: string; threshold?: number; topk?: number } = {
@@ -352,6 +355,9 @@ export function createZincgraphToolRegistry(
       } finally {
         recordToolSessionLog(dependencies, name, normalizedArgs, result, Date.now() - startedAt, thrown);
       }
+    },
+    close(): void {
+      closeCachedStores();
     }
   };
 }
@@ -497,7 +503,7 @@ function cliResult(result: CodeGraphCliResult): CallToolResult {
   return textResult(body, result.status !== 0);
 }
 
-function jsonResult(value: ContextCapsule): CallToolResult {
+function jsonResult(value: unknown): CallToolResult {
   return textResult(JSON.stringify(value, null, 2));
 }
 
@@ -763,6 +769,17 @@ function ccrStoreForProject(projectPath: string): CcrStore {
   const store = new CcrStore({ projectPath: resolvedProjectPath });
   ccrStoreCache.set(resolvedProjectPath, store);
   return store;
+}
+
+function closeCachedStores(): void {
+  for (const store of feedbackStoreCache.values()) {
+    store.close();
+  }
+  feedbackStoreCache.clear();
+  for (const store of ccrStoreCache.values()) {
+    store.close();
+  }
+  ccrStoreCache.clear();
 }
 
 function normalizeCcrContentType(contentType: string, content: string): string {

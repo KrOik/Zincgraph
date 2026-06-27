@@ -48,6 +48,7 @@ describe('CLI learn command', () => {
   });
 
   afterEach(() => {
+    historyStore.close();
     rmSync(tempDir, { recursive: true, force: true });
   });
 

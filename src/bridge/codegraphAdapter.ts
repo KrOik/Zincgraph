@@ -48,6 +48,7 @@ export interface CodeGraphCliResult {
 
 interface CodeGraphInstance {
   indexAll(options?: { verbose?: boolean; signal?: AbortSignal }): Promise<IndexResult>;
+  sync?(options?: { verbose?: boolean; signal?: AbortSignal }): Promise<unknown>;
   searchNodes(query: string, options?: SearchOptions): SearchResult[];
   getStats(): GraphStats;
   close?: () => void;
@@ -60,6 +61,23 @@ interface CodeGraphStatic {
   isInitialized(projectRoot: string): boolean;
 }
 
+interface CodeGraphRuntime {
+  CodeGraph: CodeGraphStatic;
+  getLogger?: (() => unknown) | undefined;
+  setLogger?: ((logger: unknown) => void) | undefined;
+  silentLogger?: unknown;
+}
+
+interface CodeGraphLauncher {
+  command: string;
+  argsPrefix: string[];
+  displayCommand: string;
+}
+
+export interface CodeGraphCliOptions {
+  silent?: boolean;
+}
+
 function closeGraph(graph: CodeGraphInstance): void {
   if (typeof graph.close === 'function') {
     graph.close();
@@ -68,7 +86,7 @@ function closeGraph(graph: CodeGraphInstance): void {
   graph.destroy?.();
 }
 
-async function loadCodeGraph(): Promise<CodeGraphStatic> {
+async function loadCodeGraphRuntime(): Promise<CodeGraphRuntime> {
   const moduleValue = (await import('@colbymchenry/codegraph')) as unknown as Record<string, unknown>;
   const candidate = moduleValue.CodeGraph ?? moduleValue.default ?? moduleValue;
 
@@ -78,10 +96,19 @@ async function loadCodeGraph(): Promise<CodeGraphStatic> {
     'open' in candidate &&
     'isInitialized' in candidate
   ) {
-    return candidate as unknown as CodeGraphStatic;
+    return {
+      CodeGraph: candidate as unknown as CodeGraphStatic,
+      getLogger: typeof moduleValue.getLogger === 'function' ? (moduleValue.getLogger as () => unknown) : undefined,
+      setLogger: typeof moduleValue.setLogger === 'function' ? (moduleValue.setLogger as (logger: unknown) => void) : undefined,
+      silentLogger: moduleValue.silentLogger
+    };
   }
 
   throw new Error('The @colbymchenry/codegraph SDK did not expose a CodeGraph facade.');
+}
+
+async function loadCodeGraph(): Promise<CodeGraphStatic> {
+  return (await loadCodeGraphRuntime()).CodeGraph;
 }
 
 export async function isCodeGraphSdkLoadable(): Promise<boolean> {
@@ -167,30 +194,98 @@ function localCodeGraphBin(): string | null {
   return candidates.find((candidate) => existsSync(candidate)) ?? null;
 }
 
-export function runCodeGraphCli(args: string[], cwd = process.cwd()): CodeGraphCliResult {
-  const localBin = localCodeGraphBin();
-  const command = localBin ?? 'codegraph';
-  const result = spawnSync(command, args, {
-    cwd,
-    encoding: 'utf8',
-    shell: process.platform === 'win32'
-  });
-
+function bundledCodeGraphLauncher(): CodeGraphLauncher | null {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const packageName = `@colbymchenry/codegraph-${process.platform}-${process.arch}`;
+  const packageRoots = [
+    resolve(process.cwd(), 'node_modules', packageName),
+    resolve(here, '../../node_modules', packageName),
+    resolve(here, '../node_modules', packageName)
+  ];
+  const packageRoot = packageRoots.find((candidate) => existsSync(candidate));
+  if (!packageRoot) {
+    return null;
+  }
+  if (process.platform === 'win32') {
+    const nodeExe = resolve(packageRoot, 'node.exe');
+    const entry = resolve(packageRoot, 'lib/dist/bin/codegraph.js');
+    if (existsSync(nodeExe) && existsSync(entry)) {
+      return {
+        command: nodeExe,
+        argsPrefix: ['--liftoff-only', entry],
+        displayCommand: entry
+      };
+    }
+    return null;
+  }
+  const bin = resolve(packageRoot, 'bin/codegraph');
+  if (!existsSync(bin)) {
+    return null;
+  }
   return {
-    command,
-    args,
-    status: result.status ?? 1,
-    stdout: result.stdout ?? '',
-    stderr: result.stderr ?? (result.error?.message ?? '')
+    command: bin,
+    argsPrefix: [],
+    displayCommand: bin
   };
 }
 
-export function syncCodeGraphProject(projectPath: string): CodeGraphCliResult {
-  const result = runCodeGraphCli(['sync', projectPath]);
-  if (result.status !== 0) {
-    throw new Error(result.stderr || `codegraph sync exited ${result.status}`);
+export function runCodeGraphCli(
+  args: string[],
+  cwd = process.cwd(),
+  options: CodeGraphCliOptions = {}
+): CodeGraphCliResult {
+  const bundled = bundledCodeGraphLauncher();
+  const command = bundled?.command ?? localCodeGraphBin() ?? 'codegraph';
+  const displayCommand = bundled?.displayCommand ?? command;
+  const result = spawnSync(command, [...(bundled?.argsPrefix ?? []), ...args], {
+    cwd,
+    encoding: 'utf8',
+    shell: bundled ? false : process.platform === 'win32',
+    stdio: options.silent ? 'ignore' : 'pipe'
+  });
+
+  return {
+    command: displayCommand,
+    args,
+    status: result.status ?? 1,
+    stdout: options.silent ? '' : result.stdout ?? '',
+    stderr: options.silent ? (result.error?.message ?? '') : (result.stderr ?? (result.error?.message ?? ''))
+  };
+}
+
+export async function syncCodeGraphProject(projectPath: string): Promise<unknown> {
+  const projectRoot = resolve(projectPath);
+  try {
+    const runtime = await loadCodeGraphRuntime();
+    const previousLogger = runtime.getLogger?.();
+    if (runtime.setLogger && runtime.silentLogger !== undefined) {
+      runtime.setLogger(runtime.silentLogger);
+    }
+    try {
+      const CodeGraph = runtime.CodeGraph;
+      const graph = CodeGraph.isInitialized(projectRoot)
+        ? await CodeGraph.open(projectRoot, { sync: false })
+        : await CodeGraph.init(projectRoot, { index: false });
+      try {
+        if (typeof graph.sync !== 'function') {
+          throw new Error('The @colbymchenry/codegraph SDK does not expose sync().');
+        }
+        return await graph.sync({ verbose: false });
+      } finally {
+        closeGraph(graph);
+      }
+    } finally {
+      if (runtime.setLogger && previousLogger !== undefined) {
+        runtime.setLogger(previousLogger);
+      }
+    }
+  } catch {
+    const result = runCodeGraphCli(['sync', '--quiet', projectRoot]);
+    if (result.status !== 0) {
+      throw new Error(result.stderr || `codegraph sync exited ${result.status}`);
+    }
+    return result;
   }
-  return result;
 }
 
 export function getCodeGraphStatusViaCli(projectPath: string): CodeGraphStatusJson {

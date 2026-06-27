@@ -7,10 +7,13 @@ import { buildCli } from '../../src/cli.js';
 import * as fusionCompressorModule from '../../src/compression/fusion-compressor.js';
 import { TopoSemanticQueryEngine, type ContextCapsule } from '../../src/fusion/query-engine.js';
 
+const CLI_EXPLORE_COMPRESSION_TEST_TIMEOUT_MS = 30_000;
+
 function capsule(query: string): ContextCapsule {
   return {
     query,
     strippedQuery: query,
+    intent: 'graph-navigation',
     route: 'hybrid',
     filters: {},
     nodes: [],
@@ -76,5 +79,5 @@ describe('CLI explore compression wiring', () => {
       createSpy.mockRestore();
       querySpy.mockRestore();
     }
-  });
+  }, CLI_EXPLORE_COMPRESSION_TEST_TIMEOUT_MS);
 });

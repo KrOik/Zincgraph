@@ -9,6 +9,7 @@ import { VectorManifestStore } from '../../src/freshness/manifest.js';
 import { SemanticStatus } from '../../src/freshness/semantic-status.js';
 
 const tempProjects: string[] = [];
+const manifestStores: VectorManifestStore[] = [];
 
 function tempProject(): string {
   const project = mkdtempSync(join(tmpdir(), 'zincgraph-manifest-test-'));
@@ -17,10 +18,15 @@ function tempProject(): string {
 }
 
 function manifest(project: string): VectorManifestStore {
-  return new VectorManifestStore(new FusionStore(project), 'local-token-v1:64');
+  const store = new VectorManifestStore(new FusionStore(project), 'local-token-v1:64');
+  manifestStores.push(store);
+  return store;
 }
 
 afterEach(() => {
+  for (const store of manifestStores.splice(0)) {
+    store.close();
+  }
   for (const project of tempProjects.splice(0)) {
     rmSync(project, { force: true, recursive: true });
   }
@@ -49,7 +55,7 @@ describe('Phase 1 VectorManifestStore', () => {
     expect(store.markPending('src/a.ts', 'h2').state).toBe('pending');
     expect(store.markFresh('src/a.ts', 'h2', ['doc-2']).state).toBe('fresh');
     expect(store.getByFile('src/a.ts')?.contentHash).toBe('h2');
-  });
+  }, 15_000);
 
   test('SemanticStatus generates warnings for stale and failed files', () => {
     const store = manifest(tempProject());

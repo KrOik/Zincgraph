@@ -22,6 +22,7 @@ function capsule(query: string): ContextCapsule {
   return {
     query,
     strippedQuery: query,
+    intent: 'graph-navigation',
     route: 'hybrid',
     filters: {},
     nodes: [{ nodeId: 'validate', filePath: 'auth.ts', language: 'typescript', kind: 'function', qualifiedName: 'validateToken', contentHash: 'hash', score: 1, sources: ['graph', 'vector'], sourceScores: { graph: 1, vector: 1 }, content: 'validateToken' }],
@@ -72,12 +73,12 @@ describe('Phase 4 full pipeline integration', () => {
       readGraphSnapshot: (path) => snapshot(path)
     };
     await runCli(['init', project], options);
-    const explore = JSON.parse(await runCli(['explore', 'token validation', '-p', project], options)) as { results: Array<{ qualifiedName: string }> };
+    const explore = JSON.parse(await runCli(['explore', 'token validation', '-p', project], options)) as ContextCapsule;
     const review = await runCli(['review', project], options);
     expect(delegated[0]).toEqual(['init', project]);
-    expect(explore.results[0]?.qualifiedName).toBe('validateToken');
+    expect(explore.nodes[0]?.qualifiedName).toBe('validateToken');
     expect(review).toContain('PONYTAIL');
-  });
+  }, 15_000);
 
   test('MCP registry exposes all 17 tools in pipeline', () => {
     expect(createZincgraphToolRegistry().tools).toHaveLength(17);

@@ -7,7 +7,7 @@ This benchmark evaluates how much CodeGraph and Zincgraph help an agent-facing w
 Run:
 
 ```bash
-npm run benchmark:compare
+npm test
 ```
 
 Outputs:
@@ -15,9 +15,16 @@ Outputs:
 - `bench/results/latest/summary.json`
 - `bench/results/latest/report.md`
 
-The package script builds `dist/` first, then runs `bench/compare.mjs`. Build time is not included in measured command latency.
+`npm test` now runs through `bench/test-all.mjs`, which executes the unit suite and then always executes the benchmark gate via `npm run benchmark:test` before returning a combined failure status. The benchmark test script builds `dist/` first, runs `bench/compare.mjs --runs 1`, and enforces the goal threshold through `bench/goal-gate.mjs`. Build time is not included in measured command latency.
 
-Each command runs five times by default (`--runs <n>` overrides this). The runner persists per-run status, latency, raw-output size, and diagnostic previews in `summary.json`. A task is considered failed if **any** run fails. For scoring, the runner uses exactly one deterministic selected successful run (the median-latency successful run, with stable tie-breakers). Only raw tool stdout/stderr feeds file/symbol/term/freshness/top-hit/output-byte/density scoring; echoed commands and combined/per-run diagnostics are replay aids only and are not unioned into evidence.
+For manual deeper runs:
+
+```bash
+npm run benchmark:compare
+npm run benchmark:goal
+```
+
+The default comparison command runs five times per command (`--runs <n>` overrides this). The `npm test` benchmark gate uses one run to keep CI latency bounded; `npm run benchmark:goal` uses three runs for a more stable local release gate. The runner persists per-run status, latency, raw-output size, and diagnostic previews in `summary.json`. A task is considered failed if **any** run fails. For scoring, the runner uses exactly one deterministic selected successful run (the median-latency successful run, with stable tie-breakers). Only raw tool stdout/stderr feeds file/symbol/term/freshness/top-hit/output-byte/density scoring; echoed commands and combined/per-run diagnostics are replay aids only and are not unioned into evidence.
 
 ## Dimensions
 
@@ -48,7 +55,11 @@ The local suite covers:
 4. freshness/manifest semantics,
 5. behavior dedup/review,
 6. index status coverage,
-7. isolated update/freshness behavior.
+7. isolated update/freshness behavior,
+8. graph navigation (`node`, `callers`, `callees` around `runAutoSyncOnce`),
+9. affected-test selection (`affected` for `review-command.ts` changes).
+
+The isolated-update/freshness task seeds the temp fixture first and starts timing after the initial seed index/vectorize step. The measured latency is the append -> sync -> query update path, not bootstrap setup.
 
 Current repository state roots `.codegraph` and `.zincgraph` are fingerprinted before and after the benchmark. This is a scoped non-mutation proof for those state roots only, not a whole-repo or whole-filesystem immutability claim. Mutating update/freshness checks run in fresh disposable temp fixtures for every run; the benchmark project itself is also a disposable copy prepared from the current source tree.
 
@@ -57,5 +68,3 @@ Current repository state roots `.codegraph` and `.zincgraph` are fingerprinted b
 The local score can prove whether the installed CodeGraph and Zincgraph surfaces behave well on this repository under deterministic metrics. It cannot prove universal agent effectiveness across large external corpora.
 
 For agent-level cost/tokens/time/correctness claims, use the optional external A/B extension in `bench/agent-eval/README.md`.
-
-For implementation-oriented follow-up and anti-gaming hardening, see [CodeGraph vs Zincgraph Next Steps](./codegraph-vs-zincgraph-next-steps.md).

@@ -17,6 +17,7 @@ describe('MCP session logging', () => {
   });
 
   afterEach(() => {
+    store.close();
     rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -52,28 +53,32 @@ describe('MCP session logging', () => {
 
   test('zincgraph_retrieve keeps retrieval feedback intact', async () => {
     const loop = new CompressionFeedbackLoop({ store });
-    loop.recordCompression({
-      hash: 'hash-1',
-      nodeId: 'node-1',
-      source: 'graph',
-      contentType: 'json',
-      kind: 'function',
-      compressedAt: Date.now()
-    });
+    try {
+      loop.recordCompression({
+        hash: 'hash-1',
+        nodeId: 'node-1',
+        source: 'graph',
+        contentType: 'json',
+        kind: 'function',
+        compressedAt: Date.now()
+      });
 
-    const registry = createZincgraphToolRegistry({
-      feedbackLoop: loop,
-      feedbackStore: store,
-      retrieveContent: async () => 'original content'
-    });
+      const registry = createZincgraphToolRegistry({
+        feedbackLoop: loop,
+        feedbackStore: store,
+        retrieveContent: async () => 'original content'
+      });
 
-    const result = await registry.callTool('zincgraph_retrieve', { hash: 'hash-1', query: 'auth' });
-    expect(result.isError).toBeUndefined();
-    expect(loop.recentRetrievals()).toHaveLength(1);
-    expect(loop.recentRetrievals()[0]?.hash).toBe('hash-1');
-    expect(loop.recentRetrievals()[0]?.queryContext).toBe('auth');
-    expect(store.listSessionLogs()[0]?.output).toContain('retrieved content omitted');
-    expect(store.listSessionLogs()[0]?.output).not.toContain('original content');
+      const result = await registry.callTool('zincgraph_retrieve', { hash: 'hash-1', query: 'auth' });
+      expect(result.isError).toBeUndefined();
+      expect(loop.recentRetrievals()).toHaveLength(1);
+      expect(loop.recentRetrievals()[0]?.hash).toBe('hash-1');
+      expect(loop.recentRetrievals()[0]?.queryContext).toBe('auth');
+      expect(store.listSessionLogs()[0]?.output).toContain('retrieved content omitted');
+      expect(store.listSessionLogs()[0]?.output).not.toContain('original content');
+    } finally {
+      loop.close();
+    }
   }, 15000);
 
   test('redacts JSON and quoted secret values from session logs', async () => {

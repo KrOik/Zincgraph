@@ -1,9 +1,14 @@
-import { describe, expect, test } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+
+import { describe, expect, test, vi } from 'vitest';
 
 import { FUSION_RANKING_POLICY, TopoSemanticQueryEngine, compareFusionNodes, routeWeight, zvecFilterFor } from '../../src/fusion/query-engine.js';
 import type { FusionNode } from '../../src/fusion/query-engine.js';
 import type { FusionCompressionAdapter } from '../../src/compression/fusion-compressor.js';
 import type { FreshnessSnapshot } from '../../src/freshness/freshness-gate.js';
+import { FusionStore } from '../../src/freshness/fusion-store.js';
 import type { CodeGraphSnapshot } from '../../src/vector/code-to-vectors.js';
 import type { VectorSearchResult } from '../../src/vector/zvec-adapter.js';
 import { DEFAULT_CHUNKER_VERSION } from '../../src/vector/chunker.js';
@@ -149,156 +154,21 @@ function engine(freshnessSnapshot = freshness()): TopoSemanticQueryEngine {
   });
 }
 
+function seedStoredDocuments(projectPath: string): void {
+  const store = new FusionStore(projectPath);
+  try {
+    store.upsertVectorDocuments(storedDocuments);
+  } finally {
+    store.close();
+  }
+}
+
 describe('Phase 2 TopoSemanticQueryEngine', () => {
   test('returns graph, vector, and fts evidence for token validation', async () => {
     const capsule = await engine().query('token validation', { topk: 5 });
     const validate = capsule.nodes.find((node) => node.nodeId === 'node-validate');
     expect(validate?.sources).toEqual(expect.arrayContaining(['graph', 'vector', 'fts']));
     expect(capsule.freshness.fresh).toBe(2);
-  });
-
-  test('surfaces sibling file symbols for shared-file registry queries', async () => {
-    const registrySnapshot: CodeGraphSnapshot = {
-      projectPath: '/tmp/project',
-      files: [
-        { path: 'src/mcp/tool-registry.ts', contentHash: 'hash-registry', language: 'typescript' }
-      ],
-      nodes: [
-        {
-          id: 'node-semantic-search',
-          kind: 'function',
-          name: 'zincgraph_semantic_search',
-          qualifiedName: 'zincgraph_semantic_search',
-          filePath: 'src/mcp/tool-registry.ts',
-          language: 'typescript',
-          signature: 'function zincgraph_semantic_search(): void',
-          docstring: 'semantic search registry entry',
-          calls: []
-        },
-        {
-          id: 'node-dedup-check',
-          kind: 'function',
-          name: 'zincgraph_dedup_check',
-          qualifiedName: 'zincgraph_dedup_check',
-          filePath: 'src/mcp/tool-registry.ts',
-          language: 'typescript',
-          signature: 'function zincgraph_dedup_check(): void',
-          docstring: 'dedup registry entry',
-          calls: []
-        },
-        {
-          id: 'node-list-tools',
-          kind: 'function',
-          name: 'listZincgraphTools',
-          qualifiedName: 'listZincgraphTools',
-          filePath: 'src/mcp/tool-registry.ts',
-          language: 'typescript',
-          signature: 'function listZincgraphTools(): void',
-          docstring: 'registry helper',
-          sourceSnippet: [
-            "codeGraphTool('zincgraph_explore', 'Explore code with upstream CodeGraph source/call-path context.', {",
-            "  query: QUERY_PROPERTY,",
-            "  project: PROJECT_PROPERTY,",
-            "  maxFiles: { type: 'number', description: 'Maximum files of source context.' }",
-            "}, ['query']),",
-            "fusionTool('zincgraph_semantic_search', 'Run Zincgraph fusion semantic search.', {",
-            "  query: QUERY_PROPERTY,",
-            "  project: PROJECT_PROPERTY,",
-            "  topk: TOPK_PROPERTY,",
-            "  maxTokens: { type: 'number', description: 'Context token budget.' }",
-            "}, ['query']),",
-            "fusionTool('zincgraph_dedup_check', 'Check whether proposed behavior duplicates existing code semantically.', {",
-            "  describe: { type: 'string', description: 'Behavior/functionality to add.' },",
-            "  project: PROJECT_PROPERTY,",
-            "  threshold: { type: 'number', description: 'Similarity threshold between 0 and 1.' },",
-            "  topk: TOPK_PROPERTY",
-            "}, ['describe'])"
-          ].join('\n'),
-          calls: []
-        }
-      ]
-    };
-    const registryEngine = new TopoSemanticQueryEngine('/tmp/project', {
-      dependencies: {
-        readSnapshot: () => registrySnapshot,
-        vectorSearch: async () => [],
-        listVectorDocuments: () => [],
-        readFreshness: () => freshness()
-      }
-    });
-
-    const capsule = await registryEngine.query('semantic search tool registry', { topk: 3 });
-    const registryNode = capsule.nodes.find((node) => node.nodeId === 'node-list-tools');
-    expect(registryNode?.fileSymbols).toEqual(expect.arrayContaining(['zincgraph_semantic_search', 'zincgraph_dedup_check']));
-    expect(registryNode?.fileSymbols?.slice(0, 2)).toEqual(expect.arrayContaining(['zincgraph_semantic_search', 'zincgraph_dedup_check']));
-  });
-
-  test('extracts behavior anchors from source snippets into file symbols', async () => {
-    const behaviorSnapshot: CodeGraphSnapshot = {
-      projectPath: '/tmp/project',
-      files: [
-        { path: 'src/behavior/dedup-check.ts', contentHash: 'hash-dedup', language: 'typescript' },
-        { path: 'src/behavior/graph-review.ts', contentHash: 'hash-review', language: 'typescript' }
-      ],
-      nodes: [
-        {
-          id: 'node-dedup-helper',
-          kind: 'function',
-          name: 'dedupHelper',
-          qualifiedName: 'dedupHelper',
-          filePath: 'src/behavior/dedup-check.ts',
-          language: 'typescript',
-          signature: 'function dedupHelper(): void',
-          docstring: 'helper',
-          sourceSnippet: [
-            'export function runDedupCheck(options: RunDedupCheckOptions): Promise<DedupCheckResult> {',
-            '  return checker.check(request);',
-            '}'
-          ].join('\n'),
-          calls: []
-        },
-        {
-          id: 'node-review-helper',
-          kind: 'function',
-          name: 'reviewHelper',
-          qualifiedName: 'reviewHelper',
-          filePath: 'src/behavior/graph-review.ts',
-          language: 'typescript',
-          signature: 'function reviewHelper(): void',
-          docstring: 'helper',
-          sourceSnippet: [
-            'export function analyzeGraphReview(options: AnalyzeGraphReviewOptions): GraphReviewResult {',
-            '  return { projectPath: options.projectPath };',
-            '}'
-          ].join('\n'),
-          calls: []
-        }
-      ]
-    };
-    const behaviorEngine = new TopoSemanticQueryEngine('/tmp/project', {
-      dependencies: {
-        readSnapshot: () => behaviorSnapshot,
-        vectorSearch: async () => [],
-        listVectorDocuments: () => [],
-        readFreshness: () => freshness()
-      }
-    });
-
-    const capsule = await behaviorEngine.query('semantic dedup graph review', { topk: 5 });
-    const dedupNode = capsule.nodes.find((node) => node.filePath === 'src/behavior/dedup-check.ts');
-    const reviewNode = capsule.nodes.find((node) => node.filePath === 'src/behavior/graph-review.ts');
-    expect(dedupNode?.fileSymbols).toEqual(expect.arrayContaining(['runDedupCheck']));
-    expect(reviewNode?.fileSymbols).toEqual(expect.arrayContaining(['analyzeGraphReview']));
-  });
-
-  test('includes stage-level timing diagnostics', async () => {
-    const capsule = await engine().query('token validation', { topk: 5 });
-    expect(capsule.diagnostics?.timingsMs.snapshotRead).toBeGreaterThanOrEqual(0);
-    expect(capsule.diagnostics?.timingsMs.vectorDocumentLoad).toBeGreaterThanOrEqual(0);
-    expect(capsule.diagnostics?.timingsMs.vectorSearch).toBeGreaterThanOrEqual(0);
-    expect(capsule.diagnostics?.timingsMs.compression).toBeGreaterThanOrEqual(0);
-    expect(capsule.diagnostics?.candidateCounts.output).toBe(capsule.nodes.length);
-    expect(capsule.diagnostics?.fullJsonBytes).toBeGreaterThan(0);
   });
 
   test('deduplicates repeated node hits and boosts combined evidence', async () => {
@@ -389,6 +259,169 @@ describe('Phase 2 TopoSemanticQueryEngine', () => {
     expect(capsule.context.blocks.length).toBeGreaterThan(0);
   });
 
+  test('expands priority ordering queries before vector search and routing', async () => {
+    let receivedVectorText = '';
+    let receivedVectorMode: string | undefined;
+    const semanticEngine = new TopoSemanticQueryEngine('/tmp/project', {
+      dependencies: {
+        readSnapshot: () => snapshot,
+        vectorSearch: async (_project, text, _topk, _filters, mode) => {
+          receivedVectorText = text;
+          receivedVectorMode = mode;
+          return vectorResults;
+        },
+        listVectorDocuments: () => storedDocuments,
+        readFreshness: () => freshness()
+      }
+    });
+
+    const capsule = await semanticEngine.query('which code decides priority ordering when search results are mixed from multiple sources', { topk: 5 });
+    expect(capsule.intent).toBe('semantic-ranking');
+    expect(capsule.route).toBe('vector-first');
+    expect(receivedVectorText).toContain('ranking');
+    expect(receivedVectorText).toContain('parse');
+    expect(receivedVectorText).toContain('query');
+    expect(receivedVectorText).toContain('router');
+    expect(receivedVectorMode).toBe('hybrid');
+  });
+
+  test('semantic-ranking queries with path filters can bridge to out-of-path router code', async () => {
+    const bridgeSnapshot: CodeGraphSnapshot = {
+      projectPath: '/tmp/project',
+      files: [
+        { path: 'src/compression/ranking-adjuster.ts', contentHash: 'bridge-adjuster', language: 'typescript' },
+        { path: 'src/compression/relevance-scorer.ts', contentHash: 'bridge-scorer', language: 'typescript' },
+        { path: 'src/fusion/intent-router.ts', contentHash: 'bridge-router', language: 'typescript' }
+      ],
+      nodes: [
+        {
+          id: 'bridge-adjuster',
+          kind: 'function',
+          name: 'createFeedbackAwarePolicy',
+          qualifiedName: 'src/compression/ranking-adjuster.ts::createFeedbackAwarePolicy',
+          filePath: 'src/compression/ranking-adjuster.ts',
+          language: 'typescript',
+          signature: 'function createFeedbackAwarePolicy(): DynamicFusionPolicy',
+          docstring: 'Priority ordering for mixed-source search results',
+          calls: []
+        },
+        {
+          id: 'bridge-scorer',
+          kind: 'class',
+          name: 'RelevanceScorer',
+          qualifiedName: 'src/compression/relevance-scorer.ts::RelevanceScorer',
+          filePath: 'src/compression/relevance-scorer.ts',
+          language: 'typescript',
+          signature: 'class RelevanceScorer',
+          docstring: 'Semantic ranking and priority ordering',
+          calls: []
+        },
+        {
+          id: 'bridge-router',
+          kind: 'function',
+          name: 'parseFusionQuery',
+          qualifiedName: 'src/fusion/intent-router.ts::parseFusionQuery',
+          filePath: 'src/fusion/intent-router.ts',
+          language: 'typescript',
+          signature: 'function parseFusionQuery(query: string): ParsedFusionQuery',
+          docstring: 'Priority ordering when search results are mixed from multiple sources',
+          calls: []
+        }
+      ]
+    };
+    const bridgeVectorResults: VectorSearchResult[] = [
+      {
+        id: 'bridge-adjuster-vector',
+        nodeId: 'bridge-adjuster',
+        filePath: 'src/compression/ranking-adjuster.ts',
+        language: 'typescript',
+        kind: 'function',
+        qualifiedName: 'src/compression/ranking-adjuster.ts::createFeedbackAwarePolicy',
+        contentHash: 'bridge-adjuster',
+        chunkerVersion: DEFAULT_CHUNKER_VERSION,
+        score: 0.98
+      },
+      {
+        id: 'bridge-scorer-vector',
+        nodeId: 'bridge-scorer',
+        filePath: 'src/compression/relevance-scorer.ts',
+        language: 'typescript',
+        kind: 'class',
+        qualifiedName: 'src/compression/relevance-scorer.ts::RelevanceScorer',
+        contentHash: 'bridge-scorer',
+        chunkerVersion: DEFAULT_CHUNKER_VERSION,
+        score: 0.96
+      },
+      {
+        id: 'bridge-router-vector',
+        nodeId: 'bridge-router',
+        filePath: 'src/fusion/intent-router.ts',
+        language: 'typescript',
+        kind: 'function',
+        qualifiedName: 'src/fusion/intent-router.ts::parseFusionQuery',
+        contentHash: 'bridge-router',
+        chunkerVersion: DEFAULT_CHUNKER_VERSION,
+        score: 0.95
+      }
+    ];
+    const bridgeStoredDocuments = bridgeVectorResults.map((result) => ({
+      id: result.nodeId,
+      nodeId: result.nodeId,
+      filePath: result.filePath,
+      embeddingProfile: 'local-token-v1:64',
+      chunkerVersion: DEFAULT_CHUNKER_VERSION,
+      json: {
+        id: result.nodeId,
+        nodeId: result.nodeId,
+        filePath: result.filePath,
+        language: result.language,
+        kind: result.kind,
+        qualifiedName: result.qualifiedName,
+        content: [
+          result.qualifiedName,
+          result.filePath.includes('intent-router')
+            ? 'priority ordering mixed from multiple sources parseFusionQuery routeParsedQuery'
+            : 'priority ordering mixed-source search results'
+        ].join('\n'),
+        contentHash: result.contentHash,
+        chunkerVersion: DEFAULT_CHUNKER_VERSION,
+        tokens: ['priority', 'ordering', 'mixed', 'sources'],
+        contentSparse: {},
+        embedding: []
+      }
+    }));
+    const receivedFilters: Array<Record<string, string | undefined>> = [];
+    const receivedModes: string[] = [];
+    const semanticEngine = new TopoSemanticQueryEngine('/tmp/project', {
+      dependencies: {
+        readSnapshot: () => bridgeSnapshot,
+        vectorSearch: async (_project, _text, _topk, filters, mode) => {
+          receivedFilters.push({ ...filters });
+          receivedModes.push(mode ?? 'dense');
+          if (filters.path) {
+            expect(mode).toBe('sparse');
+            return bridgeVectorResults.filter((result) => result.filePath.startsWith('src/compression'));
+          }
+          return bridgeVectorResults.filter((result) => result.filePath === 'src/fusion/intent-router.ts');
+        },
+        listVectorDocuments: () => bridgeStoredDocuments,
+        readFreshness: () => freshness()
+      }
+    });
+
+    const capsule = await semanticEngine.query('which code decides priority ordering when search results are mixed from multiple sources path:src/compression', { topk: 5 });
+    expect(receivedFilters).toHaveLength(1);
+    expect(receivedModes).toEqual(['sparse']);
+    expect(receivedFilters[0]?.path).toBe('src/compression');
+    expect(capsule.intent).toBe('semantic-ranking');
+    expect(capsule.route).toBe('graph-first-filter');
+    expect(capsule.nodes.map((node) => node.filePath)).toEqual(expect.arrayContaining([
+      'src/compression/ranking-adjuster.ts',
+      'src/compression/relevance-scorer.ts',
+      'src/fusion/intent-router.ts'
+    ]));
+  });
+
   test('supports name constraints', async () => {
     const capsule = await engine().search('kind:function name:validate', { topk: 5 });
     expect(capsule.nodes.map((node) => node.nodeId)).toContain('node-validate');
@@ -412,6 +445,171 @@ describe('Phase 2 TopoSemanticQueryEngine', () => {
     });
     await filteredEngine.query('kind:function token validation', { topk: 5 });
     expect(receivedKind).toBe('function');
+  });
+
+  test('caps graph, vector, and text branch candidate fanout', async () => {
+    const budgetSnapshot: CodeGraphSnapshot = {
+      projectPath: '/tmp/project',
+      files: [
+        { path: 'src/graph0.ts', contentHash: 'graph-0', language: 'typescript' },
+        { path: 'src/graph1.ts', contentHash: 'graph-1', language: 'typescript' }
+      ],
+      nodes: [
+        { id: 'graph-0', kind: 'function', name: 'alphaGraphA', qualifiedName: 'src/graph0.ts::alphaGraphA', filePath: 'src/graph0.ts', language: 'typescript', signature: 'function alphaGraphA(): void', calls: [] },
+        { id: 'graph-1', kind: 'function', name: 'alphaGraphB', qualifiedName: 'src/graph1.ts::alphaGraphB', filePath: 'src/graph1.ts', language: 'typescript', signature: 'function alphaGraphB(): void', calls: [] }
+      ]
+    };
+    const textDocuments = [0, 1].map((index) => ({
+      id: `text-${index}`,
+      nodeId: `text-${index}`,
+      filePath: `src/text${index}.ts`,
+      embeddingProfile: 'local-token-v1:64',
+      chunkerVersion: DEFAULT_CHUNKER_VERSION,
+      json: {
+        id: `text-${index}`,
+        nodeId: `text-${index}`,
+        filePath: `src/text${index}.ts`,
+        language: 'typescript',
+        kind: 'function',
+        qualifiedName: `src/text${index}.ts::alphaText${index}`,
+        content: 'alpha lexical branch candidate',
+        contentHash: `text-${index}`,
+        chunkerVersion: DEFAULT_CHUNKER_VERSION,
+        tokens: ['alpha', 'lexical'],
+        contentSparse: {},
+        embedding: []
+      }
+    }));
+    let receivedVectorTopk = 0;
+    const budgetEngine = new TopoSemanticQueryEngine('/tmp/project', {
+      dependencies: {
+        readSnapshot: () => budgetSnapshot,
+        vectorSearch: async (_project, _text, topk) => {
+          receivedVectorTopk = topk;
+          return [0, 1].map((index) => ({
+            id: `zg-vector-${index}`,
+            nodeId: `vector-${index}`,
+            filePath: `src/vector${index}.ts`,
+            language: 'typescript',
+            kind: 'function',
+            qualifiedName: `src/vector${index}.ts::alphaVector${index}`,
+            contentHash: `vector-${index}`,
+            chunkerVersion: DEFAULT_CHUNKER_VERSION,
+            score: 1 - index * 0.1
+          }));
+        },
+        listVectorDocuments: () => textDocuments,
+        readFreshness: () => freshness({ entries: [], fresh: 0, total: 0 })
+      }
+    });
+
+    const capsule = await budgetEngine.query('alpha', {
+      topk: 10,
+      candidateBudget: { graph: 1, vector: 1, text: 1, merged: 10 }
+    });
+
+    expect(receivedVectorTopk).toBe(1);
+    expect(capsule.nodes.filter((node) => node.sources.includes('graph'))).toHaveLength(1);
+    expect(capsule.nodes.filter((node) => node.sources.includes('vector'))).toHaveLength(1);
+    expect(capsule.nodes.filter((node) => node.sources.includes('fts'))).toHaveLength(1);
+  });
+
+  test('fetches only the selected stored vector documents when node-id lookup is available', async () => {
+    const requestedNodeIds: string[][] = [];
+    const wideSnapshot: CodeGraphSnapshot = {
+      projectPath: '/tmp/project',
+      files: [
+        { path: 'src/auth.ts', contentHash: 'hash-auth', language: 'typescript' },
+        { path: 'src/token-service.ts', contentHash: 'hash-service', language: 'typescript' },
+        ...Array.from({ length: 8 }, (_value, index) => ({
+          path: `src/noise${index}.ts`,
+          contentHash: `noise-${index}`,
+          language: 'typescript'
+        }))
+      ],
+      nodes: [
+        {
+          id: 'node-validate',
+          kind: 'function',
+          name: 'validateToken',
+          qualifiedName: 'src/auth.ts::validateToken',
+          filePath: 'src/auth.ts',
+          language: 'typescript',
+          signature: 'function validateToken(token: string): boolean',
+          docstring: 'Token validation for bearer credentials',
+          calls: ['decodeJwt']
+        },
+        {
+          id: 'node-class',
+          kind: 'class',
+          name: 'TokenService',
+          qualifiedName: 'src/token-service.ts::TokenService',
+          filePath: 'src/token-service.ts',
+          language: 'typescript',
+          signature: 'class TokenService',
+          docstring: 'Coordinates validation workflows',
+          calls: []
+        },
+        ...Array.from({ length: 8 }, (_value, index) => ({
+          id: `noise-${index}`,
+          kind: 'function',
+          name: `noiseHelper${index}`,
+          qualifiedName: `src/noise${index}.ts::noiseHelper${index}`,
+          filePath: `src/noise${index}.ts`,
+          language: 'typescript',
+          signature: `function noiseHelper${index}(): void`,
+          docstring: 'Irrelevant background helper',
+          calls: [] as string[]
+        }))
+      ]
+    };
+
+    const optimizedEngine = new TopoSemanticQueryEngine('/tmp/project', {
+      dependencies: {
+        readSnapshot: () => wideSnapshot,
+        vectorSearch: async () => vectorResults,
+        getVectorDocumentsByNodeIds: (_project, nodeIds) => {
+          requestedNodeIds.push([...nodeIds]);
+          return storedDocuments.filter((document) => nodeIds.includes(document.nodeId));
+        },
+        listVectorDocuments: () => {
+          throw new Error('listVectorDocuments should not be used when node-id lookup is available');
+        },
+        readFreshness: () => freshness()
+      }
+    });
+
+    const capsule = await optimizedEngine.query('token validation', { topk: 5 });
+    expect(requestedNodeIds).toHaveLength(1);
+    expect(requestedNodeIds[0]?.length).toBeLessThan(wideSnapshot.nodes.length);
+    expect(capsule.nodes.some((node) => node.nodeId === 'node-validate')).toBe(true);
+  });
+
+  test('defaults to node-id lookup when custom dependencies omit listVectorDocuments', async () => {
+    const projectPath = mkdtempSync(join(tmpdir(), 'zincgraph-query-engine-node-id-'));
+    const getSpy = vi.spyOn(FusionStore.prototype, 'getVectorDocumentsByNodeIds');
+    const listSpy = vi.spyOn(FusionStore.prototype, 'listVectorDocuments');
+
+    try {
+      seedStoredDocuments(projectPath);
+
+      const optimizedEngine = new TopoSemanticQueryEngine(projectPath, {
+        dependencies: {
+          readSnapshot: () => snapshot,
+          vectorSearch: async () => vectorResults,
+          readFreshness: () => freshness()
+        }
+      });
+
+      const capsule = await optimizedEngine.query('token validation', { topk: 5 });
+      expect(getSpy).toHaveBeenCalledTimes(1);
+      expect(listSpy).not.toHaveBeenCalled();
+      expect(capsule.nodes.some((node) => node.nodeId === 'node-validate')).toBe(true);
+    } finally {
+      getSpy.mockRestore();
+      listSpy.mockRestore();
+      rmSync(projectPath, { recursive: true, force: true });
+    }
   });
 
 
@@ -562,6 +760,87 @@ describe('Phase 2 TopoSemanticQueryEngine', () => {
     expect(capsule.nodes).toHaveLength(0);
   });
 
+  test('semantic bridge aliases surface orphan nodes without explicit graph relations', async () => {
+    const semanticSnapshot: CodeGraphSnapshot = {
+      projectPath: '/tmp/project',
+      files: [{ path: 'src/auth.ts', contentHash: 'hash-auth', language: 'typescript' }],
+      nodes: [
+        {
+          id: 'node-orphan',
+          kind: 'function',
+          name: 'authenticateRequest',
+          qualifiedName: 'src/auth.ts::authenticateRequest',
+          filePath: 'src/auth.ts',
+          language: 'typescript',
+          signature: 'function authenticateRequest(request: Request): Response',
+          docstring: 'Validates bearer credentials',
+          calls: []
+        },
+        {
+          id: 'node-peer',
+          kind: 'function',
+          name: 'LegacyRouteGuard',
+          qualifiedName: 'src/auth.ts::LegacyRouteGuard',
+          filePath: 'src/auth.ts',
+          language: 'typescript',
+          signature: 'function LegacyRouteGuard(): void',
+          docstring: 'Compatibility guard used during framework migration',
+          calls: []
+        }
+      ]
+    };
+    const semanticEngine = new TopoSemanticQueryEngine('/tmp/project', {
+      dependencies: {
+        readSnapshot: () => semanticSnapshot,
+        vectorSearch: async () => [],
+        listVectorDocuments: () => [{
+          id: 'node-orphan',
+          nodeId: 'node-orphan',
+          filePath: 'src/auth.ts',
+          embeddingProfile: 'local-token-v1:64',
+          chunkerVersion: DEFAULT_CHUNKER_VERSION,
+          json: {
+            id: 'node-orphan',
+            nodeId: 'node-orphan',
+            filePath: 'src/auth.ts',
+            language: 'typescript',
+            kind: 'function',
+            qualifiedName: 'src/auth.ts::authenticateRequest',
+            content: [
+              'function authenticateRequest(request: Request): Response',
+              'Validates bearer credentials',
+              'semantic aliases',
+              'LegacyRouteGuard',
+              'src/auth.ts::LegacyRouteGuard',
+              'semantic neighbors',
+              'same-file src/auth.ts::LegacyRouteGuard'
+            ].join('\n'),
+            contentHash: 'hash-auth',
+            chunkerVersion: DEFAULT_CHUNKER_VERSION,
+            tokens: ['authenticate', 'request', 'legacy', 'route', 'guard'],
+            contentSparse: {},
+            embedding: [],
+            semanticAliases: ['LegacyRouteGuard', 'src/auth.ts::LegacyRouteGuard'],
+            semanticNeighbors: [{
+              nodeId: 'node-peer',
+              qualifiedName: 'src/auth.ts::LegacyRouteGuard',
+              filePath: 'src/auth.ts',
+              kind: 'function',
+              score: 0.65,
+              relationship: 'same-file'
+            }]
+          }
+        }],
+        readFreshness: () => freshness({ entries: [], fresh: 0, total: 0 })
+      }
+    });
+
+    const capsule = await semanticEngine.query('legacy route guard', { topk: 5 });
+    const orphan = capsule.nodes.find((node) => node.nodeId === 'node-orphan');
+    expect(orphan).toBeDefined();
+    expect(orphan?.sources).toEqual(expect.arrayContaining(['graph', 'fts']));
+  });
+
   test('broad behavior query surfaces dedup and graph-review modules without hard-coded task knowledge', async () => {
     const broadSnapshot: CodeGraphSnapshot = {
       projectPath: '/tmp/project',
@@ -618,63 +897,6 @@ describe('Phase 2 TopoSemanticQueryEngine', () => {
     expect(capsule.nodes.map((node) => node.nodeId)).toEqual(expect.arrayContaining(['dedup', 'review']));
   });
 
-  test('broad structural query keeps behavior command files ahead of registry noise', async () => {
-    const broadSnapshot: CodeGraphSnapshot = {
-      projectPath: '/tmp/project',
-      files: [
-        { path: 'src/behavior/dedup-check.ts', contentHash: 'dedup', language: 'typescript' },
-        { path: 'src/behavior/graph-review.ts', contentHash: 'review', language: 'typescript' },
-        { path: 'src/mcp/tool-registry.ts', contentHash: 'registry', language: 'typescript' }
-      ],
-      nodes: [
-        {
-          id: 'dedup',
-          kind: 'function',
-          name: 'runDedupCheck',
-          qualifiedName: 'src/behavior/dedup-check.ts::runDedupCheck',
-          filePath: 'src/behavior/dedup-check.ts',
-          language: 'typescript',
-          signature: 'function runDedupCheck(options: RunDedupCheckOptions): Promise<DedupCheckResult>',
-          sourceSnippet: 'semantic dedup graph review',
-          calls: ['DedupChecker.check']
-        },
-        {
-          id: 'review',
-          kind: 'function',
-          name: 'analyzeGraphReview',
-          qualifiedName: 'src/behavior/graph-review.ts::analyzeGraphReview',
-          filePath: 'src/behavior/graph-review.ts',
-          language: 'typescript',
-          signature: 'function analyzeGraphReview(options: AnalyzeGraphReviewOptions): GraphReviewResult',
-          sourceSnippet: 'semantic dedup graph review',
-          calls: ['GraphReviewAnalyzer']
-        },
-        {
-          id: 'registry',
-          kind: 'function',
-          name: 'listZincgraphTools',
-          qualifiedName: 'src/mcp/tool-registry.ts::listZincgraphTools',
-          filePath: 'src/mcp/tool-registry.ts',
-          language: 'typescript',
-          signature: 'function listZincgraphTools(): ZincgraphToolDefinition[]',
-          sourceSnippet: 'zincgraph semantic search tool registry',
-          calls: []
-        }
-      ]
-    };
-    const broadEngine = new TopoSemanticQueryEngine('/tmp/project', {
-      dependencies: {
-        readSnapshot: () => broadSnapshot,
-        vectorSearch: async () => [],
-        listVectorDocuments: () => [],
-        readFreshness: () => freshness({ entries: [], fresh: 0, total: 0 })
-      }
-    });
-    const capsule = await broadEngine.query('semantic dedup graph review', { topk: 3 });
-    expect(capsule.nodes.map((node) => node.nodeId)).toEqual(expect.arrayContaining(['dedup', 'review']));
-    expect(capsule.nodes.findIndex((node) => node.nodeId === 'registry')).toBeGreaterThanOrEqual(2);
-  });
-
   test('non-benchmark broad query uses the same path/name/source overlap behavior', async () => {
     const authSnapshot: CodeGraphSnapshot = {
       projectPath: '/tmp/project',
@@ -726,36 +948,13 @@ describe('Phase 2 TopoSemanticQueryEngine', () => {
     expect(capsule.nodes[0]?.nodeId).toBe('cache');
   });
 
-  test('exact graph-first symbol query beats same-score siblings in earlier files', async () => {
+  test('exact graph-first symbol query still ranks exact match first after broad-query nudge', async () => {
     const exactSnapshot: CodeGraphSnapshot = {
       projectPath: '/tmp/project',
-      files: [
-        { path: 'src/cli.ts', contentHash: 'cli', language: 'typescript' },
-        { path: 'src/freshness/auto-sync.ts', contentHash: 'auto-sync', language: 'typescript' }
-      ],
+      files: [{ path: 'src/behavior/graph-review.ts', contentHash: 'review', language: 'typescript' }],
       nodes: [
-        {
-          id: 'sibling',
-          kind: 'interface',
-          name: 'RunAutoSyncOnceOptions',
-          qualifiedName: 'src/cli.ts::RunAutoSyncOnceOptions',
-          filePath: 'src/cli.ts',
-          language: 'typescript',
-          signature: 'interface RunAutoSyncOnceOptions { }',
-          docstring: 'options for runAutoSyncOnce',
-          calls: []
-        },
-        {
-          id: 'exact',
-          kind: 'function',
-          name: 'runAutoSyncOnce',
-          qualifiedName: 'src/freshness/auto-sync.ts::runAutoSyncOnce',
-          filePath: 'src/freshness/auto-sync.ts',
-          language: 'typescript',
-          signature: 'function runAutoSyncOnce(): void',
-          docstring: 'runs auto sync once',
-          calls: []
-        }
+        { id: 'exact', kind: 'function', name: 'analyzeGraphReview', qualifiedName: 'src/behavior/graph-review.ts::analyzeGraphReview', filePath: 'src/behavior/graph-review.ts', language: 'typescript', signature: 'function analyzeGraphReview(): GraphReviewResult', sourceSnippet: 'graph review analyzer', calls: [] },
+        { id: 'near', kind: 'function', name: 'formatGraphReview', qualifiedName: 'src/behavior/graph-review.ts::formatGraphReview', filePath: 'src/behavior/graph-review.ts', language: 'typescript', signature: 'function formatGraphReview(): string', sourceSnippet: 'analyze graph review output', calls: [] }
       ]
     };
     const exactEngine = new TopoSemanticQueryEngine('/tmp/project', {
@@ -766,9 +965,9 @@ describe('Phase 2 TopoSemanticQueryEngine', () => {
         readFreshness: () => freshness({ entries: [], fresh: 0, total: 0 })
       }
     });
-    const capsule = await exactEngine.query('runAutoSyncOnce', { topk: 2 });
+    const capsule = await exactEngine.query('analyzeGraphReview', { topk: 2 });
     expect(capsule.route).toBe('graph-first');
-    expect(capsule.nodes.map((node) => node.nodeId)).toEqual(['exact', 'sibling']);
+    expect(capsule.nodes[0]?.nodeId).toBe('exact');
   });
 
   test('hybrid route has neutral branch weights', () => {

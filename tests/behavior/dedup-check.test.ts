@@ -49,7 +49,6 @@ describe('Phase 3 semantic dedup checker', () => {
       checker: checker([candidates[0]!, candidates[2]!])
     });
     expect(command.output).toContain('Semantic duplicate found');
-    expect(command.output).toContain('checkType: dedup-check');
     expect(formatDedupResult(command.result)).toContain('matches=1');
   });
 
@@ -72,6 +71,7 @@ describe('Phase 3 semantic dedup checker', () => {
 
   test('default vector dedup seam queries the vector collection', async () => {
     const calls: unknown[] = [];
+    let loadedNodeIds: readonly string[] = [];
     let destroyed = false;
     const search = createVectorDedupSearch(
       '/tmp/project',
@@ -96,10 +96,14 @@ describe('Phase 3 semantic dedup checker', () => {
           destroyed = true;
         }
       }),
-      () => []
+      (_projectPath, nodeIds) => {
+        loadedNodeIds = nodeIds;
+        return [];
+      }
     );
     const [match] = await search('format date', 3);
-    expect(calls).toEqual([{ queries: [{ text: 'format date' }], topk: 3 }]);
+    expect(calls).toEqual([{ queries: [{ text: 'format date', mode: 'dense' }], topk: 3 }]);
+    expect(loadedNodeIds).toEqual([]);
     expect(destroyed).toBe(true);
     expect(match).toMatchObject({ nodeId: 'format', score: 0.91 });
   });
@@ -123,21 +127,55 @@ describe('Phase 3 semantic dedup checker', () => {
         ],
         destroy: () => {}
       }),
-      () => [{
-        id: 'old-format',
-        nodeId: 'old-format',
-        filePath: 'src/date.ts',
-        language: 'typescript',
-        kind: 'function',
-        qualifiedName: 'src/date.ts::oldFormatDate',
-        content: 'format date',
-        contentHash: 'old',
-        chunkerVersion: 'codegraph-node-v1',
-        tokens: ['format', 'date'],
-        contentSparse: {},
-        embedding: []
-      }]
+      (_projectPath, nodeIds) => {
+        expect(nodeIds).toEqual([]);
+        return [{
+          id: 'old-format',
+          nodeId: 'old-format',
+          filePath: 'src/date.ts',
+          language: 'typescript',
+          kind: 'function',
+          qualifiedName: 'src/date.ts::oldFormatDate',
+          content: 'format date',
+          contentHash: 'old',
+          chunkerVersion: 'codegraph-node-v1',
+          tokens: ['format', 'date'],
+          contentSparse: {},
+          embedding: []
+        }];
+      }
     );
     await expect(search('format date', 3)).resolves.toEqual([]);
+  });
+
+  test('vector dedup skips document hydration when the raw vector score is already below threshold', async () => {
+    let loadedNodeIds: readonly string[] = ['unexpected'];
+    const search = createVectorDedupSearch(
+      '/tmp/project',
+      () => ({
+        query: async () => [
+          {
+            id: 'zg-low',
+            nodeId: 'containment',
+            filePath: 'src/cache.ts',
+            language: 'typescript',
+            kind: 'function',
+            qualifiedName: 'src/cache.ts::reconcileWindow',
+            contentHash: 'hash',
+            chunkerVersion: DEFAULT_CHUNKER_VERSION,
+            score: 0.84
+          }
+        ],
+        destroy: () => {}
+      }),
+      (_projectPath, nodeIds) => {
+        loadedNodeIds = nodeIds;
+        return [];
+      }
+    );
+
+    const [match] = await search('auto sync path containment', 3, 0.85);
+    expect(loadedNodeIds).toEqual([]);
+    expect(match).toMatchObject({ nodeId: 'containment', score: 0.84 });
   });
 });

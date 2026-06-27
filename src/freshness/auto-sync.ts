@@ -1,12 +1,21 @@
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, readFileSync } from 'node:fs';
-import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
+import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { FusionStore } from './fusion-store.js';
-import { DEFAULT_FRESHNESS_EMBEDDING_PROFILE, summarizeFreshness, type FreshnessSnapshot } from './freshness-gate.js';
+import { summarizeFreshness, type FreshnessSnapshot } from './freshness-gate.js';
 import { VectorManifestStore, type VectorManifestEntry } from './manifest.js';
 import { syncCodeGraphProject } from '../bridge/codegraphAdapter.js';
-import { readCodeGraphSnapshot, vectorizeProject, type CodeGraphSnapshot, type VectorizeResult } from '../vector/code-to-vectors.js';
+import {
+  applyCodeGraphSnapshotReadOptions,
+  readCodeGraphSnapshot,
+  updateCodeGraphSnapshotCacheFromFiles,
+  vectorizeProject,
+  type CodeGraphSnapshot,
+  type VectorizeProjectOptions,
+  type VectorizeResult
+} from '../vector/code-to-vectors.js';
+import { resolveActiveEmbedding, type ActiveEmbeddingConfigInput } from '../vector/embedding/index.js';
 
 export interface GraphChangedFile {
   path: string;
@@ -25,7 +34,7 @@ export interface GraphChangeSource {
 }
 
 export interface AutoSyncPipelineDependencies {
-  syncProject?: (projectPath: string, event: GraphChangeEvent) => Promise<VectorizeResult | void> | VectorizeResult | void;
+  syncProject?: (projectPath: string, event: GraphChangeEvent) => Promise<AutoSyncSyncResult | void> | AutoSyncSyncResult | void;
   readSnapshot?: (projectPath: string) => CodeGraphSnapshot;
   now?: () => number;
   sleep?: (milliseconds: number) => Promise<void>;
@@ -33,13 +42,14 @@ export interface AutoSyncPipelineDependencies {
 
 export interface AutoSyncPipelineOptions {
   embeddingProfile?: string;
+  embedding?: ActiveEmbeddingConfigInput;
   debounceMs?: number;
   dependencies?: AutoSyncPipelineDependencies;
 }
 
 export interface RunAutoSyncOnceDependencies extends Omit<AutoSyncPipelineDependencies, 'syncProject'> {
   syncCodeGraph?: (projectPath: string) => Promise<unknown> | unknown;
-  vectorize?: (projectPath: string) => Promise<VectorizeResult> | VectorizeResult;
+  vectorize?: (projectPath: string, options?: VectorizeProjectOptions) => Promise<VectorizeResult> | VectorizeResult;
 }
 
 export interface RunAutoSyncOnceOptions extends Omit<AutoSyncPipelineOptions, 'dependencies'> {
@@ -67,13 +77,23 @@ export interface AutoSyncResult {
   completedAt: number;
   transitions: AutoSyncTransition[];
   warnings: string[];
+  usedIncrementalSnapshot: boolean;
+  fullSyncFallback: boolean;
+  refreshedFileCount: number;
+  vectorDocumentsWritten: number;
 }
+
+type AutoSyncSyncResult = VectorizeResult & Partial<Pick<
+  AutoSyncResult,
+  'usedIncrementalSnapshot' | 'fullSyncFallback' | 'refreshedFileCount' | 'vectorDocumentsWritten'
+>>;
 
 export class AutoSyncPipeline {
   private readonly projectPath: string;
   private readonly embeddingProfile: string;
+  private readonly chunkerVersion: string;
   private readonly debounceMs: number;
-  private readonly syncProject: (projectPath: string, event: GraphChangeEvent) => Promise<VectorizeResult | void> | VectorizeResult | void;
+  private readonly syncProject: (projectPath: string, event: GraphChangeEvent) => Promise<AutoSyncSyncResult | void> | AutoSyncSyncResult | void;
   private readonly readSnapshot: (projectPath: string) => CodeGraphSnapshot;
   private readonly now: () => number;
   private readonly sleep: (milliseconds: number) => Promise<void>;
@@ -82,9 +102,25 @@ export class AutoSyncPipeline {
 
   constructor(projectPath = process.cwd(), options: AutoSyncPipelineOptions = {}) {
     this.projectPath = resolve(projectPath);
-    this.embeddingProfile = options.embeddingProfile ?? DEFAULT_FRESHNESS_EMBEDDING_PROFILE;
+    const embedding = resolveActiveEmbedding(this.projectPath, {
+      ...options.embedding,
+      ...(options.embeddingProfile === undefined ? {} : { embeddingProfile: options.embeddingProfile })
+    });
+    this.embeddingProfile = embedding.profile;
+    this.chunkerVersion = embedding.chunkerVersion;
     this.debounceMs = options.debounceMs ?? 250;
-    this.syncProject = options.dependencies?.syncProject ?? ((target) => vectorizeProject(target));
+    this.syncProject = options.dependencies?.syncProject ?? ((target, event) => vectorizeProject(target, {
+      changedFiles: event.files.map((file) => file.path),
+      embedding: {
+        provider: embedding.provider,
+        embeddingProfile: embedding.profile,
+        chunkerVersion: embedding.chunkerVersion,
+        networkPolicy: embedding.networkPolicy
+      },
+      dependencies: {
+        adapter: embedding.adapter
+      }
+    }));
     this.readSnapshot = options.dependencies?.readSnapshot ?? readCodeGraphSnapshot;
     this.now = options.dependencies?.now ?? (() => Date.now());
     this.sleep = options.dependencies?.sleep ?? defaultSleep;
@@ -107,7 +143,7 @@ export class AutoSyncPipeline {
     this.activeSyncs += 1;
     this.lastWarning = `Zincgraph is syncing ${changedFiles.length} changed file(s) from ${source}`;
     const fusionStore = new FusionStore(this.projectPath);
-    const manifest = new VectorManifestStore(fusionStore, this.embeddingProfile);
+    const manifest = new VectorManifestStore(fusionStore, this.embeddingProfile, this.chunkerVersion);
     const transitions: AutoSyncTransition[] = [];
 
     try {
@@ -121,12 +157,19 @@ export class AutoSyncPipeline {
       for (const transition of transitions) {
         transition.pending = manifest.markPending(transition.filePath, transition.stale.contentHash);
       }
-      await this.syncProject(this.projectPath, sanitizedEvent);
-      const snapshot = this.readSnapshot(this.projectPath);
+      const syncResult = await this.syncProject(this.projectPath, sanitizedEvent);
+      const refreshedFiles = refreshedFilesByPath(syncResult);
+      const snapshot = refreshedFiles ? undefined : this.readSnapshot(this.projectPath);
+      const syncStats = syncMetrics(syncResult, transitions.length);
       for (const transition of transitions) {
-        const snapshotFile = snapshot.files.find((file) => file.path === transition.filePath);
-        const contentHash = snapshotFile?.contentHash ?? transition.stale.contentHash;
-        const docIds = snapshot.nodes.filter((node) => node.filePath === transition.filePath).map((node) => node.id);
+        const refreshedFile = refreshedFiles?.get(transition.filePath);
+        const snapshotFile = refreshedFile
+          ? undefined
+          : snapshot?.files.find((file) => file.path === transition.filePath);
+        const contentHash = refreshedFile?.contentHash ?? snapshotFile?.contentHash ?? transition.stale.contentHash;
+        const docIds = refreshedFile?.docIds ?? snapshot?.nodes
+          .filter((node) => node.filePath === transition.filePath)
+          .map((node) => node.id) ?? [];
         transition.fresh = manifest.markFresh(transition.filePath, contentHash, docIds);
       }
       const completedAt = this.now();
@@ -136,7 +179,8 @@ export class AutoSyncPipeline {
         startedAt,
         completedAt,
         transitions,
-        warnings: []
+        warnings: [],
+        ...syncStats
       };
     } catch (error) {
       if (error instanceof AutoSyncContainmentError) {
@@ -152,7 +196,11 @@ export class AutoSyncPipeline {
         startedAt,
         completedAt: this.now(),
         transitions,
-        warnings: [message]
+        warnings: [message],
+        usedIncrementalSnapshot: false,
+        fullSyncFallback: false,
+        refreshedFileCount: 0,
+        vectorDocumentsWritten: 0
       };
     } finally {
       this.activeSyncs -= 1;
@@ -164,12 +212,17 @@ export class AutoSyncPipeline {
   }
 
   freshness(): FreshnessSnapshot {
-    const fusionStore = new FusionStore(this.projectPath);
-    try {
-      const manifest = new VectorManifestStore(fusionStore, this.embeddingProfile);
-      const snapshot = summarizeFreshness(manifest.entries());
-      return this.lastWarning ? { ...snapshot, warnings: [this.lastWarning, ...snapshot.warnings] } : snapshot;
-    } finally {
+      const fusionStore = new FusionStore(this.projectPath);
+      try {
+        const manifest = new VectorManifestStore(fusionStore, this.embeddingProfile, this.chunkerVersion);
+        const snapshot = summarizeFreshness(manifest.entries());
+        const warnings = [
+          ...(this.lastWarning ? [this.lastWarning] : []),
+          ...manifestSidecarWarnings(this.projectPath, this.embeddingProfile, this.chunkerVersion),
+          ...snapshot.warnings
+        ];
+        return warnings.length > 0 ? { ...snapshot, warnings: [...new Set(warnings)] } : snapshot;
+      } finally {
       fusionStore.close();
     }
   }
@@ -195,10 +248,52 @@ export async function runAutoSyncOnce(
   const dependencies = options.dependencies ?? {};
   const syncCodeGraph = dependencies.syncCodeGraph ?? syncCodeGraphProject;
   const vectorize = dependencies.vectorize ?? vectorizeProject;
+  const useIncrementalSnapshot =
+    dependencies.syncCodeGraph === undefined &&
+    dependencies.vectorize === undefined &&
+    dependencies.readSnapshot === undefined;
   const pipelineDependencies: AutoSyncPipelineDependencies = {
-    syncProject: async (target) => {
-      await syncCodeGraph(target);
-      return vectorize(target);
+    syncProject: async (target, event) => {
+      let usedIncrementalSnapshot = false;
+      let fullSyncFallback = false;
+      const incrementalSnapshot = useIncrementalSnapshot
+        ? updateCodeGraphSnapshotCacheFromFiles(
+          target,
+          event.files.map((file) => ({
+            path: file.path,
+            contentHash: file.contentHash ?? createHash('sha256').update(file.path).digest('hex')
+          }))
+        )
+        : null;
+      usedIncrementalSnapshot = incrementalSnapshot !== null;
+      fullSyncFallback = useIncrementalSnapshot && incrementalSnapshot === null;
+      if (!incrementalSnapshot) {
+        await syncCodeGraph(target);
+      }
+      const result = await vectorize(target, {
+        changedFiles: event.files.map((file) => file.path),
+        embedding: {
+          ...options.embedding,
+          ...(options.embeddingProfile === undefined ? {} : { embeddingProfile: options.embeddingProfile })
+        },
+        ...(dependencies.readSnapshot !== undefined
+          ? { dependencies: { readSnapshot: dependencies.readSnapshot } }
+          : incrementalSnapshot
+            ? {
+              dependencies: {
+                readSnapshot: (projectPath, snapshotOptions) =>
+                  applyCodeGraphSnapshotReadOptions(incrementalSnapshot, projectPath, snapshotOptions)
+              }
+            }
+            : {})
+      });
+      return {
+        ...result,
+        usedIncrementalSnapshot,
+        fullSyncFallback,
+        refreshedFileCount: result.refreshedFiles?.length ?? 0,
+        vectorDocumentsWritten: result.documentsWritten
+      };
     }
   };
   if (dependencies.readSnapshot !== undefined) {
@@ -214,6 +309,9 @@ export async function runAutoSyncOnce(
   const pipelineOptions: AutoSyncPipelineOptions = { dependencies: pipelineDependencies };
   if (options.embeddingProfile !== undefined) {
     pipelineOptions.embeddingProfile = options.embeddingProfile;
+  }
+  if (options.embedding !== undefined) {
+    pipelineOptions.embedding = options.embedding;
   }
   if (options.debounceMs !== undefined) {
     pipelineOptions.debounceMs = options.debounceMs;
@@ -233,6 +331,79 @@ export async function runAutoSyncOnce(
   }
 
   return new AutoSyncPipeline(projectPath, pipelineOptions).handleChange(event);
+}
+
+function refreshedFilesByPath(
+  result: AutoSyncSyncResult | void
+): Map<string, { contentHash: string; docIds: readonly string[] }> | null {
+  if (!result || !Array.isArray(result.refreshedFiles) || result.refreshedFiles.length === 0) {
+    return null;
+  }
+  return new Map(result.refreshedFiles.map((entry) => [
+    entry.path,
+    { contentHash: entry.contentHash, docIds: entry.docIds }
+  ]));
+}
+
+function syncMetrics(
+  result: AutoSyncSyncResult | void,
+  transitionCount: number
+): Pick<AutoSyncResult, 'usedIncrementalSnapshot' | 'fullSyncFallback' | 'refreshedFileCount' | 'vectorDocumentsWritten'> {
+  return {
+    usedIncrementalSnapshot: result?.usedIncrementalSnapshot ?? false,
+    fullSyncFallback: result?.fullSyncFallback ?? false,
+    refreshedFileCount: result?.refreshedFileCount ?? result?.refreshedFiles?.length ?? transitionCount,
+    vectorDocumentsWritten: result?.vectorDocumentsWritten ?? result?.documentsWritten ?? 0
+  };
+}
+
+function manifestSidecarWarnings(projectPath: string, embeddingProfile: string, chunkerVersion: string): string[] {
+  const manifestsDir = join(resolve(projectPath), '.zincgraph', 'manifests');
+  const manifestPath = join(
+    manifestsDir,
+    `manifest-${createHash('sha256').update(`${embeddingProfile}\0${chunkerVersion}`).digest('hex').slice(0, 16)}.json`
+  );
+  if (!existsSync(manifestPath)) {
+    return [];
+  }
+
+  const warnings = [`using manifest sidecar ${basename(manifestPath)} for freshness`];
+  const cachePath = join(resolve(projectPath), '.zincgraph', 'embedding-metadata.json');
+  const fusionDbPath = join(resolve(projectPath), '.zincgraph', 'fusion.sqlite');
+  if (!existsSync(cachePath)) {
+    warnings.push('embedding metadata cache missing while manifest sidecar exists');
+  } else {
+    try {
+      const parsed = JSON.parse(readFileSync(cachePath, 'utf8')) as { dbMtimeMs?: unknown };
+      const cachedDbMtime = typeof parsed.dbMtimeMs === 'number' ? parsed.dbMtimeMs : undefined;
+      if (existsSync(fusionDbPath)) {
+        const fusionDbMtime = lstatSync(fusionDbPath).mtimeMs;
+        if (cachedDbMtime === undefined || cachedDbMtime < fusionDbMtime) {
+          warnings.push('embedding metadata cache is older than fusion.sqlite while manifest sidecar exists');
+        }
+      }
+    } catch {
+      warnings.push('embedding metadata cache could not be parsed while manifest sidecar exists');
+    }
+  }
+
+  const sidecars = existsSync(manifestsDir)
+    ? requireManifestSidecars(manifestsDir)
+    : [];
+  if (sidecars.length > 1) {
+    warnings.push(`multiple manifest sidecars detected (${sidecars.length}); using ${basename(manifestPath)}`);
+  }
+  return warnings;
+}
+
+function requireManifestSidecars(manifestsDir: string): string[] {
+  try {
+    return readdirSync(manifestsDir)
+      .filter((fileName) => /^manifest-[0-9a-f]{16}\.json$/i.test(fileName))
+      .map((fileName) => join(manifestsDir, fileName));
+  } catch {
+    return [];
+  }
 }
 
 function normalizeChangedFiles(projectPath: string, files: readonly GraphChangedFile[]): Array<{ path: string; contentHash: string }> {

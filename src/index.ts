@@ -46,6 +46,7 @@ export {
   openCollection
 } from './vector/collection-manager.js';
 export type {
+  CodeVectorCollectionOptions,
   CodeVectorCollection,
   CodeVectorQuery
 } from './vector/collection-manager.js';
@@ -68,15 +69,31 @@ export {
   LocalTokenEmbedding,
   NetworkPolicy,
   RemoteProviderBlockedError,
+  SiliconFlowEmbedding,
   cosineSimilarity,
+  EmbeddingProviderError,
+  cacheResolvedEmbedding,
+  embedOrThrow,
+  embedWithResult,
+  resolveActiveEmbedding,
   getAdapter,
   sparseCosineSimilarity,
-  tokenizeCodeText
+  tokenizeCodeText,
+  toProviderErrorDetail,
+  updateEmbeddingMetadataCache
 } from './vector/embedding/index.js';
 export type {
+  ActiveEmbeddingConfigInput,
   EmbeddingAdapter,
+  EmbeddingBatchFailure,
+  EmbeddingBatchResult,
+  EmbeddingBatchSuccess,
   EmbeddingProvider,
-  EmbeddingResult
+  EmbeddingProviderErrorDetail,
+  EmbeddingProviderErrorKind,
+  EmbeddingResult,
+  ResolvedEmbeddingConfig,
+  SiliconFlowEmbeddingOptions
 } from './vector/embedding/index.js';
 
 export {
@@ -113,11 +130,19 @@ export type {
   TopoSemanticQueryEngineOptions
 } from './fusion/query-engine.js';
 export {
+  summarizeContextCapsule
+} from './fusion/context-summary.js';
+export type {
+  CompactContextCapsule,
+  CompactContextNode
+} from './fusion/context-summary.js';
+export {
   parseFusionQuery,
   queryTerms,
   routeQuery
 } from './fusion/intent-router.js';
 export type {
+  FusionIntent,
   ParsedFusionQuery,
   QueryRoute,
   ScalarFilters
@@ -192,7 +217,7 @@ export type {
   DedupCheckResult,
   DedupCheckerDependencies,
   DedupCollectionOpener,
-  DedupDocumentLister,
+  DedupDocumentLoader,
   DedupRecommendation,
   RunDedupCheckOptions
 } from './behavior/dedup-check.js';

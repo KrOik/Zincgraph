@@ -1,6 +1,16 @@
-import { tokenizeCodeText } from '../vector/embedding/local.js';
+import { expandSemanticQueryTokens } from '../vector/embedding/local.js';
 
+/**
+ * Semantic intent router for priority ordering when search results are mixed from multiple sources.
+ * Keeps ranking-aware queries, graph navigation, freshness, and compression feedback on the right route.
+ */
 export type QueryRoute = 'graph-first' | 'graph-first-filter' | 'vector-first' | 'hybrid';
+export type FusionIntent =
+  | 'exact-symbol'
+  | 'graph-navigation'
+  | 'freshness/status'
+  | 'semantic-ranking'
+  | 'compression-feedback';
 
 export interface ScalarFilters {
   language?: string;
@@ -15,6 +25,7 @@ export interface ParsedFusionQuery {
   text: string;
   filters: ScalarFilters;
   terms: string[];
+  intent: FusionIntent;
   route: QueryRoute;
 }
 
@@ -27,9 +38,73 @@ const FIELD_ALIASES = new Map<string, keyof ScalarFilters>([
   ['name', 'name']
 ]);
 
-const SEMANTIC_HINTS = new Set(['similar', 'like', 'related']);
+const SEMANTIC_RANKING_HINTS = new Set([
+  'semantic',
+  'similar',
+  'ranking',
+  'rank',
+  'relevance',
+  'related',
+  'rerank',
+  'retrieve'
+]);
+const COMPRESSION_FEEDBACK_HINTS = new Set([
+  'compress',
+  'compression',
+  'compressor',
+  'feedback',
+  'retrieve',
+  'retrieval',
+  'stats',
+  'hash',
+  'ccr'
+]);
+const FRESHNESS_STATUS_HINTS = new Set([
+  'fresh',
+  'freshness',
+  'stale',
+  'pending',
+  'failed',
+  'manifest',
+  'status',
+  'sync',
+  'autosync',
+  'update',
+  'updates',
+  'vector',
+  'vectors',
+  'changed'
+]);
+const GRAPH_NAVIGATION_HINTS = new Set([
+  'graph',
+  'impact',
+  'caller',
+  'callers',
+  'callee',
+  'callees',
+  'call',
+  'calls',
+  'dependency',
+  'dependencies',
+  'trace',
+  'flow',
+  'topology'
+]);
+const GRAPH_FIRST_HINTS = new Set([
+  'caller',
+  'callers',
+  'callee',
+  'callees',
+  'impact',
+  'trace',
+  'topology'
+]);
 const FIELD_TOKEN = /^([A-Za-z][A-Za-z0-9_-]*):(.+)$/;
 
+/**
+ * Decide priority ordering when search results are mixed from multiple sources.
+ * Parses scalar filters, classifies semantic intent, and picks the route.
+ */
 export function parseFusionQuery(query: string): ParsedFusionQuery {
   const original = query.trim();
   const filters: ScalarFilters = {};
@@ -52,11 +127,13 @@ export function parseFusionQuery(query: string): ParsedFusionQuery {
   }
 
   const text = textParts.join(' ').trim();
-  const route = routeParsedQuery(text, filters);
+  const intent = classifyIntent(text, filters);
+  const route = routeParsedQuery(text, filters, intent);
   return {
     original,
     text,
     filters,
+    intent,
     route,
     terms: queryTerms(text, filters)
   };
@@ -68,7 +145,7 @@ export function routeQuery(query: string): QueryRoute {
 
 export function queryTerms(text: string, filters: ScalarFilters = {}): string[] {
   const seed = text.trim() || filters.name || filters.file || filters.path || '';
-  return tokenizeCodeText(seed);
+  return expandSemanticQueryTokens(seed);
 }
 
 function setFilter(filters: ScalarFilters, key: keyof ScalarFilters, value: string): void {
@@ -91,27 +168,57 @@ function setFilter(filters: ScalarFilters, key: keyof ScalarFilters, value: stri
   }
 }
 
-function routeParsedQuery(text: string, filters: ScalarFilters): QueryRoute {
-  if (filters.path || filters.file) {
-    return 'graph-first-filter';
-  }
-  const terms = tokenizeCodeText(text);
-  if (terms.some((term) => SEMANTIC_HINTS.has(term))) {
-    return 'vector-first';
-  }
-  if (isLikelyExactSymbol(text)) {
-    return 'graph-first';
-  }
-  if (filters.name && !text) {
-    return 'graph-first-filter';
-  }
-  return 'hybrid';
-}
-
-function isLikelyExactSymbol(text: string): boolean {
+export function isLikelyExactSymbolQuery(text: string): boolean {
   const trimmed = text.trim();
+  if (!trimmed) {
+    return false;
+  }
   if (!/^[A-Za-z_$][\w$]*$/.test(trimmed)) {
     return false;
   }
   return /[a-z0-9][A-Z]/.test(trimmed) || /^[A-Z]/.test(trimmed) || trimmed.includes('_');
+}
+
+function classifyIntent(text: string, filters: ScalarFilters): FusionIntent {
+  const exactSymbol = isLikelyExactSymbolQuery(text) || (filters.name ? isLikelyExactSymbolQuery(filters.name) : false);
+  if (exactSymbol) {
+    return 'exact-symbol';
+  }
+
+  const terms = queryTerms(text, filters);
+  if (containsHint(terms, COMPRESSION_FEEDBACK_HINTS)) {
+    return 'compression-feedback';
+  }
+  if (containsHint(terms, FRESHNESS_STATUS_HINTS)) {
+    return 'freshness/status';
+  }
+  if (containsHint(terms, GRAPH_NAVIGATION_HINTS)) {
+    return 'graph-navigation';
+  }
+  if (containsHint(terms, SEMANTIC_RANKING_HINTS)) {
+    return 'semantic-ranking';
+  }
+  return 'graph-navigation';
+}
+
+function routeParsedQuery(text: string, filters: ScalarFilters, intent: FusionIntent): QueryRoute {
+  if (filters.path || filters.file || (filters.name && !text)) {
+    return 'graph-first-filter';
+  }
+  if (intent === 'exact-symbol' || isLikelyExactSymbolQuery(text)) {
+    return 'graph-first';
+  }
+  switch (intent) {
+    case 'semantic-ranking':
+      return 'vector-first';
+    case 'graph-navigation':
+      return containsHint(queryTerms(text, filters), GRAPH_FIRST_HINTS) ? 'graph-first' : 'hybrid';
+    case 'freshness/status':
+    case 'compression-feedback':
+      return 'hybrid';
+  }
+}
+
+function containsHint(terms: readonly string[], hints: ReadonlySet<string>): boolean {
+  return terms.some((term) => hints.has(term));
 }

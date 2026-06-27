@@ -35,6 +35,8 @@ describe('ReviewCompressor (T6.2)', () => {
   });
 
   afterEach(async () => {
+    compressor.close();
+    ccrStore.close();
     await rm(tempDir, { recursive: true, force: true });
   });
 
@@ -88,26 +90,37 @@ describe('ReviewCompressor (T6.2)', () => {
   test('createFromProject persists discussed findings across compressor instances', async () => {
     const findings = [finding('dead-code', 'src/old.ts', 'legacyFn', { node: { qualifiedName: 'legacyFn', filePath: 'src/old.ts' } })];
     const first = ReviewCompressor.createFromProject(tempDir);
-    const firstResult = await first.compress(findings);
-    expect(firstResult.aggregated[0]?.previouslyDiscussed).toBe(false);
+    try {
+      const firstResult = await first.compress(findings);
+      expect(firstResult.aggregated[0]?.previouslyDiscussed).toBe(false);
 
-    const second = ReviewCompressor.createFromProject(tempDir);
-    const secondResult = await second.compress(findings);
-    expect(secondResult.aggregated[0]?.previouslyDiscussed).toBe(true);
+      const second = ReviewCompressor.createFromProject(tempDir);
+      try {
+        const secondResult = await second.compress(findings);
+        expect(secondResult.aggregated[0]?.previouslyDiscussed).toBe(true);
+      } finally {
+        second.close();
+      }
+    } finally {
+      first.close();
+    }
   }, 15000);
 
   test('queryContext scopes previously discussed findings', async () => {
     const findings = [finding('dead-code', 'src/old.ts', 'legacyFn', { node: { qualifiedName: 'legacyFn', filePath: 'src/old.ts' } })];
     const compressor = ReviewCompressor.createFromProject(tempDir);
+    try {
+      const first = await compressor.compress(findings, { queryContext: 'diff-a' });
+      expect(first.aggregated[0]?.previouslyDiscussed).toBe(false);
 
-    const first = await compressor.compress(findings, { queryContext: 'diff-a' });
-    expect(first.aggregated[0]?.previouslyDiscussed).toBe(false);
+      const second = await compressor.compress(findings, { queryContext: 'diff-b' });
+      expect(second.aggregated[0]?.previouslyDiscussed).toBe(false);
 
-    const second = await compressor.compress(findings, { queryContext: 'diff-b' });
-    expect(second.aggregated[0]?.previouslyDiscussed).toBe(false);
-
-    const third = await compressor.compress(findings, { queryContext: 'diff-a' });
-    expect(third.aggregated[0]?.previouslyDiscussed).toBe(true);
+      const third = await compressor.compress(findings, { queryContext: 'diff-a' });
+      expect(third.aggregated[0]?.previouslyDiscussed).toBe(true);
+    } finally {
+      compressor.close();
+    }
   }, 15000);
 
   test('skipDiscussed option omits previously discussed groups', async () => {
@@ -133,12 +146,16 @@ describe('ReviewCompressor (T6.2)', () => {
 
   test('records compression events to feedback loop when provided', async () => {
     const loop = new CompressionFeedbackLoop({ store: new (await import('../../src/compression/feedback-store.js')).FeedbackStore({ projectPath: tempDir }) });
-    const compressorWithFeedback = new ReviewCompressor({ ccrStore, feedbackLoop: loop });
-    const findings = [finding('dead-code', 'src/old.ts', 'legacyFn', { node: { qualifiedName: 'legacyFn', filePath: 'src/old.ts' } })];
-    await compressorWithFeedback.compress(findings);
-    const summary = loop.summarize();
-    expect(summary.totalCompressions).toBeGreaterThan(0);
-    expect(summary.byKind['dead-code']?.compressed).toBeGreaterThan(0);
+    try {
+      const compressorWithFeedback = new ReviewCompressor({ ccrStore, feedbackLoop: loop });
+      const findings = [finding('dead-code', 'src/old.ts', 'legacyFn', { node: { qualifiedName: 'legacyFn', filePath: 'src/old.ts' } })];
+      await compressorWithFeedback.compress(findings);
+      const summary = loop.summarize();
+      expect(summary.totalCompressions).toBeGreaterThan(0);
+      expect(summary.byKind['dead-code']?.compressed).toBeGreaterThan(0);
+    } finally {
+      loop.close();
+    }
   }, 15000);
 
   test('findingSignature is stable for identical findings', () => {

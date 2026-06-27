@@ -19,6 +19,10 @@ describe('Phase 2 intent router', () => {
     expect(routeQuery('similar to token validation')).toBe('vector-first');
   });
 
+  test('routes priority ordering queries vector-first after semantic expansion', () => {
+    expect(routeQuery('which code decides priority ordering when search results are mixed from multiple sources')).toBe('vector-first');
+  });
+
   test('parses scalar filters and strips them from free text', () => {
     const parsed = parseFusionQuery('kind:function lang:typescript path:src/api name:auth token validation');
     expect(parsed.filters).toEqual({

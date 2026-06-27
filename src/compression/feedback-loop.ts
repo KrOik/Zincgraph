@@ -29,6 +29,7 @@ export class CompressionFeedbackLoop {
   readonly store: FeedbackStore;
   private readonly frequentRetrievalThreshold: number;
   private readonly neverRetrievalThreshold: number;
+  private closed = false;
 
   constructor(options: CompressionFeedbackLoopOptions) {
     this.store = options.store;
@@ -126,6 +127,14 @@ export class CompressionFeedbackLoop {
 
   recentCompressions(since?: number): CompressionEvent[] {
     return this.store.listCompressionEvents(since);
+  }
+
+  close(): void {
+    if (this.closed) {
+      return;
+    }
+    this.closed = true;
+    this.store.close();
   }
 }
 

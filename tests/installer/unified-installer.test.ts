@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, existsSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, existsSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -16,6 +16,25 @@ import type { AgentInstallTargetInput as RootAgentInstallTargetInput } from '../
 function fixture(): string {
   return mkdtempSync(join(tmpdir(), 'zincgraph-installer-'));
 }
+
+function canCreateSymlinks(): boolean {
+  const root = fixture();
+  const target = join(root, 'target');
+  const link = join(root, 'link');
+  try {
+    mkdirSync(target);
+    symlinkSync(target, link, 'dir');
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'EPERM' || code === 'EACCES') return false;
+    throw error;
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+const symlinkTest = canCreateSymlinks() ? test : test.skip;
 
 describe('Phase 4 unified installer', () => {
   test('detects Claude Code project marker', () => {
@@ -90,7 +109,7 @@ describe('Phase 4 unified installer', () => {
     expect(result.writtenPaths.every((path) => path.startsWith(configRoot))).toBe(true);
   });
 
-  test('rejects symlinked agent directories that would escape config root', async () => {
+  symlinkTest('rejects symlinked agent directories that would escape config root', async () => {
     const root = fixture();
     const outside = fixture();
     symlinkSync(outside, join(root, '.claude'), 'dir');
@@ -106,7 +125,7 @@ describe('Phase 4 unified installer', () => {
     expect(existsSync(join(root, '.mcp.json'))).toBe(false);
   });
 
-  test('rejects final MCP config symlink before writing', async () => {
+  symlinkTest('rejects final MCP config symlink before writing', async () => {
     const root = fixture();
     const outside = fixture();
     mkdirSync(join(root, '.claude'));
@@ -241,7 +260,7 @@ describe('Phase 4 unified installer', () => {
     })).rejects.toThrow(/outside config root/);
   });
 
-  test('plan rejects symlinked path components without creating directories or files', async () => {
+  symlinkTest('plan rejects symlinked path components without creating directories or files', async () => {
     const root = fixture();
     const outside = fixture();
     symlinkSync(outside, join(root, 'linked'), 'dir');
@@ -261,7 +280,7 @@ describe('Phase 4 unified installer', () => {
     expect(existsSync(join(outside, 'nested'))).toBe(false);
   });
 
-  test('plan rejects final file symlinks before returning writes', async () => {
+  symlinkTest('plan rejects final file symlinks before returning writes', async () => {
     const root = fixture();
     const outside = fixture();
     mkdirSync(join(root, '.custom'));
@@ -283,7 +302,7 @@ describe('Phase 4 unified installer', () => {
     expect(readFileSync(outsideConfig, 'utf8')).toBe('{}');
   });
 
-  test('plan and install reject dangling final symlinks before outside target creation', async () => {
+  symlinkTest('plan and install reject dangling final symlinks before outside target creation', async () => {
     const planRoot = fixture();
     const planOutside = fixture();
     mkdirSync(join(planRoot, '.custom'));
@@ -323,7 +342,7 @@ describe('Phase 4 unified installer', () => {
     expect(existsSync(installOutsideConfig)).toBe(false);
   });
 
-  test('plan rejects configRoot with symlinked ancestor without side effects', async () => {
+  symlinkTest('plan rejects configRoot with symlinked ancestor without side effects', async () => {
     const project = fixture();
     const outside = fixture();
     symlinkSync(outside, join(project, 'linked'), 'dir');
@@ -344,7 +363,7 @@ describe('Phase 4 unified installer', () => {
     expect(existsSync(join(outside, 'config'))).toBe(false);
   });
 
-  test('install rejects configRoot with symlinked ancestor before mkdir or writes', async () => {
+  symlinkTest('install rejects configRoot with symlinked ancestor before mkdir or writes', async () => {
     const project = fixture();
     const outside = fixture();
     symlinkSync(outside, join(project, 'linked'), 'dir');
@@ -368,7 +387,7 @@ describe('Phase 4 unified installer', () => {
     expect(existsSync(join(outside, 'config/.custom/mcp.json'))).toBe(false);
   });
 
-  test('unsafe configRoot is rejected even when no targets are selected', async () => {
+  symlinkTest('unsafe configRoot is rejected even when no targets are selected', async () => {
     const project = fixture();
     const outside = fixture();
     symlinkSync(outside, join(project, 'linked'), 'dir');

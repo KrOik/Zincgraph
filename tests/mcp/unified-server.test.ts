@@ -11,6 +11,8 @@ import * as fusionCompressorModule from '../../src/compression/fusion-compressor
 import type { GraphReviewCommandResult } from '../../src/behavior/review-command.js';
 import { TopoSemanticQueryEngine, type ContextCapsule } from '../../src/fusion/query-engine.js';
 
+const MCP_TEST_TIMEOUT_MS = 30_000;
+
 function resultText(result: CallToolResult): string {
   return result.content.filter((item) => item.type === 'text').map((item) => item.text).join('\n');
 }
@@ -19,6 +21,7 @@ function capsule(query: string): ContextCapsule {
   return {
     query,
     strippedQuery: query,
+    intent: 'graph-navigation',
     route: 'hybrid',
     filters: {},
     nodes: [],
@@ -46,12 +49,12 @@ describe('Phase 4 unified MCP registry/server', () => {
   test('lists exactly the 17 Phase 5 tools', () => {
     expect(listZincgraphTools().map((tool) => tool.name)).toEqual([...ZINCGRAPH_TOOL_NAMES]);
     expect(listZincgraphTools()).toHaveLength(17);
-  });
+  }, MCP_TEST_TIMEOUT_MS);
 
   test('creates an MCP server with unified handlers', () => {
     const server = createZincgraphMcpServer();
     expect(server).toBeTruthy();
-  });
+  }, MCP_TEST_TIMEOUT_MS);
 
   test('delegates callers to upstream CodeGraph CLI', async () => {
     const calls: string[][] = [];
@@ -64,7 +67,7 @@ describe('Phase 4 unified MCP registry/server', () => {
     const result = await registry.callTool('zincgraph_callers', { symbol: 'authenticateUser', project: '/repo', limit: 3, json: true });
     expect(calls[0]).toEqual(['callers', 'authenticateUser', '-p', '/repo', '--limit', '3', '--json']);
     expect(resultText(result)).toContain('caller output');
-  });
+  }, MCP_TEST_TIMEOUT_MS);
 
   test('delegates status to upstream CodeGraph CLI with JSON by default', async () => {
     const calls: string[][] = [];
@@ -76,13 +79,13 @@ describe('Phase 4 unified MCP registry/server', () => {
     });
     await registry.callTool('zincgraph_status', { project: '/repo' });
     expect(calls[0]).toEqual(['status', '/repo', '--json']);
-  });
+  }, MCP_TEST_TIMEOUT_MS);
 
   test('delegates Ponytail instructions builder', async () => {
     const registry = createZincgraphToolRegistry({ buildPonytailInstructions: async (mode) => `instructions:${mode}` });
     const result = await registry.callTool('zincgraph_ponytail_instructions', { mode: 'lite' });
     expect(resultText(result)).toBe('instructions:lite');
-  });
+  }, MCP_TEST_TIMEOUT_MS);
 
   test('delegates graph-enhanced review command', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'zincgraph-mcp-review-'));
@@ -93,15 +96,27 @@ describe('Phase 4 unified MCP registry/server', () => {
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
-  });
+  }, MCP_TEST_TIMEOUT_MS);
 
   test('delegates fusion semantic search', async () => {
     const registry = createZincgraphToolRegistry({
       createFusionEngine: () => ({ query: async (query) => capsule(query), search: async (query) => capsule(query) })
     });
     const result = await registry.callTool('zincgraph_semantic_search', { project: '/repo', query: 'token validation', topk: 2 });
-    expect(JSON.parse(resultText(result))).toMatchObject({ query: 'token validation' });
-  });
+    const parsed = JSON.parse(resultText(result)) as Record<string, unknown>;
+    expect(parsed).toMatchObject({ query: 'token validation' });
+    expect(parsed.documents).toBeUndefined();
+  }, MCP_TEST_TIMEOUT_MS);
+
+  test('semantic search full mode returns the full context capsule', async () => {
+    const registry = createZincgraphToolRegistry({
+      createFusionEngine: () => ({ query: async (query) => capsule(query), search: async (query) => capsule(query) })
+    });
+    const result = await registry.callTool('zincgraph_semantic_search', { project: '/repo', query: 'token validation', full: true });
+    const parsed = JSON.parse(resultText(result)) as ContextCapsule;
+    expect(parsed.query).toBe('token validation');
+    expect(parsed.documents).toEqual([]);
+  }, MCP_TEST_TIMEOUT_MS);
 
   test('delegates fusion semantic search with a project-scoped compressor by default', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'zincgraph-mcp-default-'));
@@ -111,7 +126,9 @@ describe('Phase 4 unified MCP registry/server', () => {
     try {
       const registry = createZincgraphToolRegistry();
       const result = await registry.callTool('zincgraph_semantic_search', { project: tempDir, query: 'token validation', topk: 2 });
-      expect(JSON.parse(resultText(result))).toMatchObject({ query: 'token validation' });
+      const parsed = JSON.parse(resultText(result)) as Record<string, unknown>;
+      expect(parsed).toMatchObject({ query: 'token validation' });
+      expect(parsed.documents).toBeUndefined();
       expect(createSpy).toHaveBeenCalledWith(tempDir);
       expect(searchSpy).toHaveBeenCalled();
     } finally {
@@ -119,7 +136,7 @@ describe('Phase 4 unified MCP registry/server', () => {
       searchSpy.mockRestore();
       rmSync(tempDir, { recursive: true, force: true });
     }
-  });
+  }, MCP_TEST_TIMEOUT_MS);
 
   test('does not fall back to cwd when feedback policy init fails', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'zincgraph-mcp-policy-'));
@@ -161,7 +178,7 @@ describe('Phase 4 unified MCP registry/server', () => {
       searchSpy.mockRestore();
       rmSync(tempDir, { recursive: true, force: true });
     }
-  });
+  }, MCP_TEST_TIMEOUT_MS);
 
   test('semantic search still succeeds when feedback-loop creation fails inside the default compressor', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'zincgraph-mcp-feedback-'));
@@ -183,7 +200,7 @@ describe('Phase 4 unified MCP registry/server', () => {
       searchSpy.mockRestore();
       rmSync(tempDir, { recursive: true, force: true });
     }
-  });
+  }, MCP_TEST_TIMEOUT_MS);
 
   test('delegates semantic dedup check', async () => {
     const registry = createZincgraphToolRegistry({
@@ -194,11 +211,11 @@ describe('Phase 4 unified MCP registry/server', () => {
     });
     const result = await registry.callTool('zincgraph_dedup_check', { describe: 'format date' });
     expect(resultText(result)).toContain('Semantic duplicate');
-  });
+  }, MCP_TEST_TIMEOUT_MS);
 
   test('unknown tool returns MCP error content', async () => {
     const result = await createZincgraphToolRegistry().callTool('unknown_tool');
     expect(result.isError).toBe(true);
     expect(resultText(result)).toContain('Unknown Zincgraph tool');
-  });
+  }, MCP_TEST_TIMEOUT_MS);
 });

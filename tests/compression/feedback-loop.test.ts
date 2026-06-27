@@ -31,6 +31,8 @@ describe('CompressionFeedbackLoop (T6.1)', () => {
   });
 
   afterEach(async () => {
+    loop.close();
+    store.close();
     await rm(tempDir, { recursive: true, force: true });
   });
 
@@ -135,8 +137,12 @@ describe('CompressionFeedbackLoop (T6.1)', () => {
 
   test('createfromProject factory builds an independent feedback loop', () => {
     const factoryLoop = CompressionFeedbackLoop.createFromProject(tempDir);
-    factoryLoop.recordCompression({ hash: 'f', nodeId: 'n', source: 'graph', contentType: 'json', kind: 'function', compressedAt: 1 });
-    const summary = factoryLoop.summarize();
-    expect(summary.totalCompressions).toBe(1);
+    try {
+      factoryLoop.recordCompression({ hash: 'f', nodeId: 'n', source: 'graph', contentType: 'json', kind: 'function', compressedAt: 1 });
+      const summary = factoryLoop.summarize();
+      expect(summary.totalCompressions).toBe(1);
+    } finally {
+      factoryLoop.close();
+    }
   });
 });

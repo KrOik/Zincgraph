@@ -55,6 +55,7 @@ export class FusionCompressor implements FusionCompressionAdapter {
   private readonly defaultMaxTokens: number;
   private readonly defaultStrategy: 'auto' | 'aggressive' | 'conservative' | 'off';
   private readonly feedbackLoop: CompressionFeedbackLoop | undefined;
+  private closed = false;
   private stats: CompressionStats = {
     totalCompressions: 0,
     totalTokensBefore: 0,
@@ -170,6 +171,15 @@ export class FusionCompressor implements FusionCompressionAdapter {
 
   getStats(): CompressionStats {
     return { ...this.stats };
+  }
+
+  close(): void {
+    if (this.closed) {
+      return;
+    }
+    this.closed = true;
+    this.feedbackLoop?.close();
+    this.ccrStore.close();
   }
 
   static createFromProject(projectPath: string, options?: Partial<FusionCompressorOptions>): FusionCompressor {

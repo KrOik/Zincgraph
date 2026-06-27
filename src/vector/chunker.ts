@@ -1,4 +1,4 @@
-export const DEFAULT_CHUNKER_VERSION = 'codegraph-node-v2-source-snippet';
+export const DEFAULT_CHUNKER_VERSION = 'codegraph-node-v3-semantic-bridge';
 
 export function chunkerCollectionDirectory(chunkerVersion = DEFAULT_CHUNKER_VERSION): string {
   if (chunkerVersion === 'codegraph-node-v1') {

@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'vitest';
+import { fileURLToPath } from 'node:url';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
 
-import { buildCli, type CliBuildOptions } from '../src/cli.js';
+import { buildCli, isMainModule, type CliBuildOptions } from '../src/cli.js';
 import type { PonytailCommandDelegation } from '../src/bridge/ponytailAdapter.js';
 import type { FreshnessGateOptions } from '../src/freshness/freshness-gate.js';
 import type { ContextCapsule } from '../src/fusion/query-engine.js';
@@ -14,6 +18,7 @@ function capsule(query: string): ContextCapsule {
   return {
     query,
     strippedQuery: query,
+    intent: 'graph-navigation',
     route: 'hybrid',
     filters: {},
     nodes: [
@@ -53,6 +58,64 @@ function emptySnapshot(projectPath: string): CodeGraphSnapshot {
   return { projectPath, files: [], nodes: [] };
 }
 
+function navigationSnapshot(projectPath: string): CodeGraphSnapshot {
+  return {
+    projectPath,
+    files: [
+      { path: 'src/freshness/auto-sync.ts', contentHash: 'a', language: 'typescript' },
+      { path: 'src/bridge/codegraphAdapter.ts', contentHash: 'b', language: 'typescript' },
+      { path: 'src/vector/code-to-vectors.ts', contentHash: 'c', language: 'typescript' },
+      { path: 'src/index.ts', contentHash: 'd', language: 'typescript' }
+    ],
+    nodes: [
+      {
+        id: 'pipeline',
+        kind: 'class',
+        name: 'AutoSyncPipeline',
+        qualifiedName: 'AutoSyncPipeline',
+        filePath: 'src/freshness/auto-sync.ts',
+        language: 'typescript',
+        signature: 'class AutoSyncPipeline',
+        sourceSnippet: 'export class AutoSyncPipeline { handleChange() {} }',
+        calls: []
+      },
+      {
+        id: 'runner',
+        kind: 'function',
+        name: 'runAutoSyncOnce',
+        qualifiedName: 'runAutoSyncOnce',
+        filePath: 'src/freshness/auto-sync.ts',
+        language: 'typescript',
+        signature: 'function runAutoSyncOnce()',
+        sourceSnippet: 'export function runAutoSyncOnce() { return new AutoSyncPipeline(); }',
+        calls: ['AutoSyncPipeline', 'syncCodeGraphProject', 'vectorizeProject']
+      },
+      {
+        id: 'sync',
+        kind: 'function',
+        name: 'syncCodeGraphProject',
+        qualifiedName: 'syncCodeGraphProject',
+        filePath: 'src/bridge/codegraphAdapter.ts',
+        language: 'typescript',
+        signature: 'function syncCodeGraphProject()',
+        sourceSnippet: 'export async function syncCodeGraphProject() { return null; }',
+        calls: []
+      },
+      {
+        id: 'vectorize',
+        kind: 'function',
+        name: 'vectorizeProject',
+        qualifiedName: 'vectorizeProject',
+        filePath: 'src/vector/code-to-vectors.ts',
+        language: 'typescript',
+        signature: 'function vectorizeProject()',
+        sourceSnippet: 'export async function vectorizeProject() { return null; }',
+        calls: []
+      }
+    ]
+  };
+}
+
 function autoSyncResult(projectPath: string, filePath = 'auth.ts'): AutoSyncResult {
   const entry = {
     entryKey: `local:v1:${filePath}`,
@@ -69,6 +132,10 @@ function autoSyncResult(projectPath: string, filePath = 'auth.ts'): AutoSyncResu
     source: 'cli',
     startedAt: 1,
     completedAt: 2,
+    usedIncrementalSnapshot: true,
+    fullSyncFallback: false,
+    refreshedFileCount: 1,
+    vectorDocumentsWritten: 1,
     transitions: [{ filePath, stale: { ...entry, state: 'stale' }, pending: { ...entry, state: 'pending' }, fresh: entry }],
     warnings: []
   };
@@ -78,8 +145,6 @@ async function runCli(args: string[], options: CliBuildOptions = {}): Promise<st
   let output = '';
   const originalLog = console.log;
   const originalError = console.error;
-  const originalStdoutWrite = process.stdout.write;
-  const originalStderrWrite = process.stderr.write;
   const program = buildCli({
     createFusionEngine: () => ({
       query: async (query: string) => capsule(query),
@@ -102,104 +167,60 @@ async function runCli(args: string[], options: CliBuildOptions = {}): Promise<st
   console.error = (value?: unknown) => {
     output += `${String(value)}\n`;
   };
-  process.stdout.write = ((chunk: unknown, encoding?: BufferEncoding | ((error?: Error | null) => void), callback?: (error?: Error | null) => void) => {
-    output += String(chunk);
-    if (typeof encoding === 'function') {
-      encoding();
-    } else if (callback) {
-      callback();
-    }
-    return true;
-  }) as typeof process.stdout.write;
-  process.stderr.write = ((chunk: unknown, encoding?: BufferEncoding | ((error?: Error | null) => void), callback?: (error?: Error | null) => void) => {
-    output += String(chunk);
-    if (typeof encoding === 'function') {
-      encoding();
-    } else if (callback) {
-      callback();
-    }
-    return true;
-  }) as typeof process.stderr.write;
   try {
     await program.parseAsync(['node', 'zincgraph', ...args]);
     return output;
   } finally {
     console.log = originalLog;
     console.error = originalError;
-    process.stdout.write = originalStdoutWrite;
-    process.stderr.write = originalStderrWrite;
   }
 }
 
 describe('Phase 2 CLI integration', () => {
-  test('explore command prints compact JSON by default', async () => {
+  test('main guard recognizes native file paths on Windows and POSIX', () => {
+    const cliPath = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
+    expect(isMainModule(cliPath)).toBe(true);
+  });
+
+  test('explore command prints a compact JSON summary by default', async () => {
     const output = await runCli(['explore', 'token validation', '--topk', '2']);
-    const parsed = JSON.parse(output) as {
-      results: Array<{ sources: string[] }>;
-      route: string;
-      textBranch: string;
-      nativeFts: false | string;
-    };
-    expect(parsed.results[0]?.sources).toEqual(['graph', 'vector']);
-    expect(parsed.route).toBe('hybrid');
-    expect(parsed.textBranch).toBe('fusion-store-token-overlap');
-    expect(parsed.nativeFts).toBe(false);
-  });
-
-  test('explore --format full-json preserves the context capsule shape', async () => {
-    const output = await runCli(['explore', 'token validation', '--topk', '2', '--format', 'full-json']);
-    const parsed = JSON.parse(output) as ContextCapsule;
+    const parsed = JSON.parse(output) as Record<string, unknown> & { nodes: Array<Record<string, unknown>>; context: Record<string, unknown> };
     expect(parsed.nodes[0]?.sources).toEqual(['graph', 'vector']);
+    expect(parsed.nodes[0]?.content).toBeUndefined();
+    expect(parsed.documents).toBeUndefined();
+    expect(parsed.context.blockCount).toBe(0);
   });
 
-  test('status --json forwards raw CodeGraph output', async () => {
-    const output = await runCli(['status', '.', '--json'], {
-      runCodeGraphCli: () => ({
-        command: 'codegraph',
-        args: ['status', '.', '--json'],
-        status: 0,
-        stdout: JSON.stringify({
-          initialized: true,
-          fileCount: 1,
-          nodeCount: 2,
-          edgeCount: 3,
-          languages: ['typescript']
-        }),
-        stderr: ''
-      })
-    });
-    const parsed = JSON.parse(output) as { delegated?: boolean; initialized: boolean; fileCount: number };
-    expect(parsed.delegated).toBeUndefined();
-    expect(parsed.initialized).toBe(true);
-    expect(parsed.fileCount).toBe(1);
-  });
-
-  test('status --delegated-json wraps CodeGraph output with Zincgraph metadata', async () => {
-    const output = await runCli(['status', '.', '--json', '--delegated-json'], {
-      runCodeGraphCli: () => ({
-        command: 'codegraph',
-        args: ['status', '.', '--json'],
-        status: 0,
-        stdout: JSON.stringify({
-          initialized: true,
-          fileCount: 1,
-          nodeCount: 2,
-          edgeCount: 3,
-          languages: ['typescript']
-        }),
-        stderr: ''
-      })
-    });
-    const parsed = JSON.parse(output) as { delegated: boolean; upstream: { initialized: boolean; fileCount: number } };
-    expect(parsed.delegated).toBe(true);
-    expect(parsed.upstream.initialized).toBe(true);
-    expect(parsed.upstream.fileCount).toBe(1);
+  test('explore --full-json prints the full context capsule', async () => {
+    const output = await runCli(['explore', 'token validation', '--topk', '2', '--full-json']);
+    const parsed = JSON.parse(output) as ContextCapsule;
+    expect(parsed.nodes[0]?.content).toContain('validateToken');
+    expect(parsed.documents).toEqual([]);
   });
 
   test('search command supports fielded query syntax', async () => {
     const output = await runCli(['search', 'kind:function name:auth', '--topk', '2']);
-    const parsed = JSON.parse(output) as ContextCapsule;
+    const parsed = JSON.parse(output) as Record<string, unknown>;
     expect(parsed.query).toBe('kind:function name:auth');
+    expect(parsed.documents).toBeUndefined();
+  });
+
+  test('explore short-circuits registry queries before creating the fusion engine', async () => {
+    let fusionCalls = 0;
+    const output = await runCli(['explore', 'zincgraph semantic search tool registry', '--topk', '10'], {
+      createFusionEngine: () => {
+        fusionCalls += 1;
+        throw new Error('fusion engine should not be used for registry queries');
+      }
+    });
+
+    const parsed = JSON.parse(output) as { route?: string; nodes?: Array<Record<string, unknown>> };
+    expect(fusionCalls).toBe(0);
+    expect(parsed.route).toBe('registry-fast');
+    expect(parsed.nodes?.map((node) => node.qualifiedName)).toEqual(expect.arrayContaining([
+      'zincgraph_semantic_search',
+      'zincgraph_dedup_check'
+    ]));
   });
 
   test('review syncs stale freshness before delegating', async () => {
@@ -215,7 +236,15 @@ describe('Phase 2 CLI integration', () => {
       syncProject: async () => { events.push('sync'); },
       readGraphSnapshot: (project) => emptySnapshot(project),
       readGraphDiff: () => '',
-      runPonytailReview: (project, options = {}) => ponytailDelegation(project, options.diff ?? false)
+      runPonytailReview: (project, options = {}) => ponytailDelegation(project, options.diff ?? false),
+      runGraphReview: async (project, options) => ({
+        projectPath: project,
+        ponytail: options.ponytail ?? ponytailDelegation(project, options.diff ?? false),
+        graph: null,
+        graphFindings: [],
+        graphAvailable: true,
+        warnings: []
+      })
     });
     expect(events).toEqual(['gate', 'sync']);
   });
@@ -281,7 +310,15 @@ describe('Phase 2 CLI integration', () => {
         }
       }),
       readGraphSnapshot: (project) => emptySnapshot(project),
-      runPonytailReview: (project, options = {}) => ponytailDelegation(project, options.diff ?? false)
+      runPonytailReview: (project, options = {}) => ponytailDelegation(project, options.diff ?? false),
+      runGraphReview: async (project, options) => ({
+        projectPath: project,
+        ponytail: options.ponytail ?? ponytailDelegation(project, options.diff ?? false),
+        graph: null,
+        graphFindings: [],
+        graphAvailable: true,
+        warnings: []
+      })
     });
     expect(forced).toBe(true);
   });
@@ -296,11 +333,20 @@ describe('Phase 2 CLI integration', () => {
       runPonytailReview: (project, options = {}) => {
         ponytailCalls += 1;
         return ponytailDelegation(project, options.diff ?? false);
+      },
+      runGraphReview: async (project, options) => ({
+        projectPath: project,
+        ponytail: options.ponytail ?? ponytailDelegation(project, options.diff ?? false),
+        graph: null,
+        graphFindings: [],
+        graphAvailable: true,
+        warnings: []
       }
+      )
     });
     expect(ponytailCalls).toBe(1);
     expect(output).toContain('PONYTAIL');
-    expect(output).toContain('# Graph review (compressed): 0 finding group(s)');
+    expect(output).toContain('Zincgraph graph evidence: none');
   });
 
   test('review reports index-not-fresh when sync fails', async () => {
@@ -334,15 +380,31 @@ describe('Phase 2 CLI integration', () => {
 
 
 describe('Phase 4 CLI production readiness', () => {
-  test('callers command delegates to CodeGraph', async () => {
-    const calls: string[][] = [];
-    await runCli(['callers', 'authenticateUser', '-p', '/repo'], {
-      runCodeGraphCli: (args) => {
-        calls.push(args);
-        return { command: 'codegraph', args, status: 0, stdout: '', stderr: '' };
-      }
-    });
-    expect(calls[0]).toEqual(['callers', 'authenticateUser', '-p', '/repo']);
+  test('graph navigation commands use the native snapshot path', async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'zincgraph-cli-graph-'));
+    try {
+      const indexPath = join(projectDir, 'src/index.ts');
+      mkdirSync(dirname(indexPath), { recursive: true });
+      writeFileSync(indexPath, [
+        'export { runAutoSyncOnce } from "../freshness/auto-sync.js";',
+        'export { vectorizeProject } from "../vector/code-to-vectors.js";'
+      ].join('\n'));
+
+      const options = { readGraphSnapshot: () => navigationSnapshot(projectDir) };
+
+      const nodeOutput = await runCli(['node', 'runAutoSyncOnce', '-p', projectDir], options);
+      const callersOutput = await runCli(['callers', 'AutoSyncPipeline', '-p', projectDir], options);
+      const calleesOutput = await runCli(['callees', 'runAutoSyncOnce', '-p', projectDir], options);
+
+      expect(nodeOutput).toContain('node query runAutoSyncOnce');
+      expect(nodeOutput).toContain('file src/index.ts');
+      expect(nodeOutput).toContain('runAutoSyncOnce');
+      expect(callersOutput).toContain('caller function runAutoSyncOnce src/freshness/auto-sync.ts');
+      expect(calleesOutput).toContain('callee function syncCodeGraphProject src/bridge/codegraphAdapter.ts');
+      expect(calleesOutput).toContain('callee function vectorizeProject src/vector/code-to-vectors.ts');
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
   });
 
   test('search remains fusion-backed by default', async () => {
@@ -396,10 +458,17 @@ describe('Phase 4 CLI production readiness', () => {
       }
     });
 
-    const parsed = JSON.parse(output) as AutoSyncResult;
+    const parsed = JSON.parse(output) as {
+      transitions: Array<{
+        filePath: string;
+        states: string[];
+      }>;
+    };
     expect(calledProject).toBe('/repo');
     expect(calledInput).toEqual({ files: ['auth.ts'], source: 'cli' });
     expect(parsed.transitions[0]?.filePath).toBe('auth.ts');
+    expect(parsed.transitions[0]?.states).toEqual(['stale', 'pending', 'fresh']);
+    expect(parsed.transitions[0]).not.toHaveProperty('stale');
   });
 
   test('auto-sync requires at least one changed file', async () => {
@@ -431,7 +500,15 @@ describe('Phase 4 CLI production readiness', () => {
         ensureReady: async () => ({ allowed: true, forced: true, synced: false, freshness: { fresh: 1, pending: 0, stale: 0, failed: 0, total: 1, isFresh: true, warnings: [], entries: [] }, warnings: [] })
       }),
       readGraphSnapshot: (project) => emptySnapshot(project),
-      runPonytailReview: (project) => ponytailDelegation(project, false)
+      runPonytailReview: (project) => ponytailDelegation(project, false),
+      runGraphReview: async (project, options) => ({
+        projectPath: project,
+        ponytail: options.ponytail ?? ponytailDelegation(project, false),
+        graph: null,
+        graphFindings: [],
+        graphAvailable: true,
+        warnings: []
+      })
     });
     expect(output).toContain('PONYTAIL');
   });

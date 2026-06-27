@@ -1,6 +1,7 @@
+import { createHash } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 
 import { zincgraphDataDir } from '../vector/zvec-adapter.js';
 
@@ -21,26 +22,29 @@ export interface StoredManifestEntry {
   json: unknown;
 }
 
-interface FusionResponse<T> {
-  ok: boolean;
-  result?: T;
-  error?: string;
-}
+type VectorDocumentRow = {
+  id: string;
+  nodeId: string;
+  filePath: string;
+  embeddingProfile: string;
+  chunkerVersion: string;
+  json: string;
+};
 
-const PYTHON_SCRIPT = String.raw`
-import json
-import sqlite3
-import sys
+type ManifestEntryRow = {
+  entryKey: string;
+  filePath: string;
+  embeddingProfile: string;
+  chunkerVersion: string;
+  json: string;
+};
 
-request = json.loads(sys.stdin.read())
-db_path = request["dbPath"]
-operation = request["operation"]
-payload = request.get("payload", {})
+type MetadataRow = {
+  key: string;
+  value: string;
+};
 
-con = sqlite3.connect(db_path)
-con.execute("PRAGMA journal_mode=WAL")
-con.execute("PRAGMA synchronous=NORMAL")
-con.execute("""
+const VECTOR_DOCUMENT_SCHEMA = `
 CREATE TABLE IF NOT EXISTS vector_documents(
   id TEXT PRIMARY KEY,
   node_id TEXT NOT NULL,
@@ -48,77 +52,21 @@ CREATE TABLE IF NOT EXISTS vector_documents(
   embedding_profile TEXT NOT NULL,
   chunker_version TEXT NOT NULL DEFAULT 'codegraph-node-v1',
   json TEXT NOT NULL
-)
-""")
-columns = [row[1] for row in con.execute("PRAGMA table_info(vector_documents)").fetchall()]
-if "chunker_version" not in columns:
-  con.execute("ALTER TABLE vector_documents ADD COLUMN chunker_version TEXT NOT NULL DEFAULT 'codegraph-node-v1'")
-con.execute("""
+);
 CREATE TABLE IF NOT EXISTS manifest_entries(
   entry_key TEXT PRIMARY KEY,
   file_path TEXT NOT NULL,
   embedding_profile TEXT NOT NULL,
   chunker_version TEXT NOT NULL,
   json TEXT NOT NULL
-)
-""")
-con.execute("""
+);
 CREATE TABLE IF NOT EXISTS metadata(
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
-)
-""")
-con.execute("CREATE INDEX IF NOT EXISTS idx_vector_documents_file ON vector_documents(file_path)")
-con.execute("CREATE INDEX IF NOT EXISTS idx_manifest_entries_file ON manifest_entries(file_path)")
-
-def row_to_vector(row):
-  return {"id": row[0], "nodeId": row[1], "filePath": row[2], "embeddingProfile": row[3], "chunkerVersion": row[4], "json": json.loads(row[5])}
-
-def row_to_manifest(row):
-  return {"entryKey": row[0], "filePath": row[1], "embeddingProfile": row[2], "chunkerVersion": row[3], "json": json.loads(row[4])}
-
-result = None
-if operation == "init":
-  result = {"dbPath": db_path}
-elif operation == "upsert_vector_documents":
-  docs = payload.get("documents", [])
-  con.executemany(
-    "INSERT INTO vector_documents(id,node_id,file_path,embedding_profile,chunker_version,json) VALUES(?,?,?,?,?,?) "
-    "ON CONFLICT(id) DO UPDATE SET node_id=excluded.node_id,file_path=excluded.file_path,embedding_profile=excluded.embedding_profile,chunker_version=excluded.chunker_version,json=excluded.json",
-    [(d["id"], d["nodeId"], d["filePath"], d["embeddingProfile"], d.get("chunkerVersion", "codegraph-node-v1"), json.dumps(d["json"], sort_keys=True)) for d in docs]
-  )
-  result = {"count": len(docs)}
-elif operation == "list_vector_documents":
-  rows = con.execute("SELECT id,node_id,file_path,embedding_profile,chunker_version,json FROM vector_documents ORDER BY id").fetchall()
-  result = [row_to_vector(row) for row in rows]
-elif operation == "count_vector_documents":
-  result = con.execute("SELECT count(*) FROM vector_documents").fetchone()[0]
-elif operation == "upsert_manifest_entries":
-  entries = payload.get("entries", [])
-  con.executemany(
-    "INSERT INTO manifest_entries(entry_key,file_path,embedding_profile,chunker_version,json) VALUES(?,?,?,?,?) "
-    "ON CONFLICT(entry_key) DO UPDATE SET file_path=excluded.file_path,embedding_profile=excluded.embedding_profile,chunker_version=excluded.chunker_version,json=excluded.json",
-    [(e["entryKey"], e["filePath"], e["embeddingProfile"], e["chunkerVersion"], json.dumps(e["json"], sort_keys=True)) for e in entries]
-  )
-  result = {"count": len(entries)}
-elif operation == "list_manifest_entries":
-  rows = con.execute("SELECT entry_key,file_path,embedding_profile,chunker_version,json FROM manifest_entries ORDER BY file_path").fetchall()
-  result = [row_to_manifest(row) for row in rows]
-elif operation == "get_manifest_entry":
-  row = con.execute("SELECT entry_key,file_path,embedding_profile,chunker_version,json FROM manifest_entries WHERE entry_key=?", (payload["entryKey"],)).fetchone()
-  result = None if row is None else row_to_manifest(row)
-elif operation == "set_metadata":
-  con.execute("INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (payload["key"], payload["value"]))
-  result = True
-elif operation == "get_metadata":
-  row = con.execute("SELECT value FROM metadata WHERE key=?", (payload["key"],)).fetchone()
-  result = None if row is None else row[0]
-else:
-  raise ValueError(f"unknown operation: {operation}")
-
-con.commit()
-con.close()
-print(json.dumps({"ok": True, "result": result}, sort_keys=True))
+);
+CREATE INDEX IF NOT EXISTS idx_vector_documents_file ON vector_documents(file_path);
+CREATE INDEX IF NOT EXISTS idx_vector_documents_node ON vector_documents(node_id);
+CREATE INDEX IF NOT EXISTS idx_manifest_entries_file ON manifest_entries(file_path);
 `;
 
 export function fusionStorePath(projectPath: string): string {
@@ -127,66 +75,289 @@ export function fusionStorePath(projectPath: string): string {
 
 export class FusionStore {
   readonly dbPath: string;
+  private readonly db: DatabaseSync;
+  private closed = false;
 
   constructor(projectPathOrDbPath: string) {
     const resolved = resolve(projectPathOrDbPath);
     this.dbPath = resolved.endsWith('.sqlite') ? resolved : fusionStorePath(resolved);
     mkdirSync(dirname(this.dbPath), { recursive: true });
-    this.run('init', {});
+    this.db = new DatabaseSync(this.dbPath);
+    this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;');
+    this.db.exec(VECTOR_DOCUMENT_SCHEMA);
+    ensureVectorDocumentChunkerVersion(this.db);
   }
 
   upsertVectorDocuments(documents: readonly StoredVectorDocument[]): void {
-    this.run('upsert_vector_documents', { documents });
+    if (documents.length === 0) {
+      return;
+    }
+    const statement = this.db.prepare(
+      'INSERT INTO vector_documents(id,node_id,file_path,embedding_profile,chunker_version,json) VALUES(?,?,?,?,?,?) ' +
+      'ON CONFLICT(id) DO UPDATE SET node_id=excluded.node_id,file_path=excluded.file_path,embedding_profile=excluded.embedding_profile,' +
+      'chunker_version=excluded.chunker_version,json=excluded.json'
+    );
+    runInTransaction(this.db, () => {
+      for (const document of documents) {
+        statement.run(
+          document.id,
+          document.nodeId,
+          document.filePath,
+          document.embeddingProfile,
+          document.chunkerVersion,
+          JSON.stringify(document.json)
+        );
+      }
+    });
   }
 
-  listVectorDocuments(): StoredVectorDocument[] {
-    return this.run<StoredVectorDocument[]>('list_vector_documents', {});
+  deleteVectorDocumentsByFilePaths(filePaths: readonly string[], embeddingProfile: string, chunkerVersion: string): void {
+    if (filePaths.length === 0) {
+      return;
+    }
+    const placeholders = filePaths.map(() => '?').join(',');
+    const statement = this.db.prepare(
+      `DELETE FROM vector_documents WHERE file_path IN (${placeholders}) AND embedding_profile = ? AND chunker_version = ?`
+    );
+    statement.run(...filePaths, embeddingProfile, chunkerVersion);
   }
 
-  countVectorDocuments(): number {
-    return this.run<number>('count_vector_documents', {});
+  listVectorDocuments(embeddingProfile?: string, chunkerVersion?: string): StoredVectorDocument[] {
+    const { sql, params } = buildVectorDocumentListQuery(embeddingProfile, chunkerVersion);
+    const rows = this.db.prepare(sql).all(...params) as VectorDocumentRow[];
+    return rows.map(readVectorDocumentRow);
+  }
+
+  getVectorDocumentsByNodeIds(nodeIds: readonly string[], embeddingProfile: string, chunkerVersion: string): StoredVectorDocument[] {
+    const uniqueNodeIds = [...new Set(nodeIds.filter((nodeId) => nodeId.length > 0))];
+    if (uniqueNodeIds.length === 0) {
+      return [];
+    }
+    const placeholders = uniqueNodeIds.map(() => '?').join(',');
+    const rows = this.db.prepare(
+      `SELECT id,node_id AS nodeId,file_path AS filePath,embedding_profile AS embeddingProfile,chunker_version AS chunkerVersion,json
+       FROM vector_documents
+       WHERE node_id IN (${placeholders}) AND embedding_profile = ? AND chunker_version = ?
+       ORDER BY id`
+    ).all(...uniqueNodeIds, embeddingProfile, chunkerVersion) as VectorDocumentRow[];
+    return rows.map(readVectorDocumentRow);
+  }
+
+  countVectorDocuments(embeddingProfile?: string, chunkerVersion?: string): number {
+    const { sql, params } = buildVectorDocumentCountQuery(embeddingProfile, chunkerVersion);
+    const row = this.db.prepare(sql).get(...params) as { count?: number | bigint } | undefined;
+    return Number(row?.count ?? 0);
   }
 
   upsertManifestEntries(entries: readonly StoredManifestEntry[]): void {
-    this.run('upsert_manifest_entries', { entries });
+    if (entries.length === 0) {
+      return;
+    }
+    const statement = this.db.prepare(
+      'INSERT INTO manifest_entries(entry_key,file_path,embedding_profile,chunker_version,json) VALUES(?,?,?,?,?) ' +
+      'ON CONFLICT(entry_key) DO UPDATE SET file_path=excluded.file_path,embedding_profile=excluded.embedding_profile,' +
+      'chunker_version=excluded.chunker_version,json=excluded.json'
+    );
+    runInTransaction(this.db, () => {
+      for (const entry of entries) {
+        statement.run(
+          entry.entryKey,
+          entry.filePath,
+          entry.embeddingProfile,
+          entry.chunkerVersion,
+          JSON.stringify(entry.json)
+        );
+      }
+    });
   }
 
-  listManifestEntries(): StoredManifestEntry[] {
-    return this.run<StoredManifestEntry[]>('list_manifest_entries', {});
+  deleteManifestEntriesByFilePaths(filePaths: readonly string[], embeddingProfile: string, chunkerVersion: string): void {
+    if (filePaths.length === 0) {
+      return;
+    }
+    const placeholders = filePaths.map(() => '?').join(',');
+    const statement = this.db.prepare(
+      `DELETE FROM manifest_entries WHERE file_path IN (${placeholders}) AND embedding_profile = ? AND chunker_version = ?`
+    );
+    statement.run(...filePaths, embeddingProfile, chunkerVersion);
+  }
+
+  listManifestEntries(embeddingProfile?: string, chunkerVersion?: string): StoredManifestEntry[] {
+    const { sql, params } = buildManifestEntryListQuery(embeddingProfile, chunkerVersion);
+    const rows = this.db.prepare(sql).all(...params) as ManifestEntryRow[];
+    return rows.map(readManifestEntryRow);
   }
 
   getManifestEntry(entryKey: string): StoredManifestEntry | null {
-    return this.run<StoredManifestEntry | null>('get_manifest_entry', { entryKey });
+    const row = this.db.prepare(
+      'SELECT entry_key AS entryKey,file_path AS filePath,embedding_profile AS embeddingProfile,chunker_version AS chunkerVersion,json ' +
+      'FROM manifest_entries WHERE entry_key = ?'
+    ).get(entryKey) as ManifestEntryRow | undefined;
+    return row ? readManifestEntryRow(row) : null;
   }
 
   setMetadata(key: string, value: string): void {
-    this.run('set_metadata', { key, value });
+    this.db.prepare(
+      'INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value'
+    ).run(key, value);
+  }
+
+  setMetadataEntries(entries: Readonly<Record<string, string>>): void {
+    const normalized = Object.fromEntries(
+      Object.entries(entries).filter((entry): entry is [string, string] => entry[0].length > 0 && entry[1].length > 0)
+    );
+    if (Object.keys(normalized).length === 0) {
+      return;
+    }
+    const statement = this.db.prepare(
+      'INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value'
+    );
+    runInTransaction(this.db, () => {
+      for (const [key, value] of Object.entries(normalized)) {
+        statement.run(key, value);
+      }
+    });
   }
 
   getMetadata(key: string): string | null {
-    return this.run<string | null>('get_metadata', { key });
+    const row = this.db.prepare('SELECT value FROM metadata WHERE key = ?').get(key) as MetadataRow | undefined;
+    return row?.value ?? null;
+  }
+
+  getMetadataEntries(keys: readonly string[]): Record<string, string> {
+    const uniqueKeys = [...new Set(keys.filter((key) => key.length > 0))];
+    if (uniqueKeys.length === 0) {
+      return {};
+    }
+    const placeholders = uniqueKeys.map(() => '?').join(',');
+    const rows = this.db.prepare(
+      `SELECT key,value FROM metadata WHERE key IN (${placeholders})`
+    ).all(...uniqueKeys) as MetadataRow[];
+    return Object.fromEntries(rows.map((row) => [row.key, row.value]));
   }
 
   close(): void {
-    // Connections are short-lived Python sqlite3 processes; nothing to close here.
+    if (this.closed) {
+      return;
+    }
+    this.closed = true;
+    this.db.close();
   }
+}
 
-  private run<T>(operation: string, payload: unknown): T {
-    const py = process.platform === 'win32' ? 'python' : 'python3';
-    const child = spawnSync(py, ['-c', PYTHON_SCRIPT], {
-      input: JSON.stringify({ dbPath: this.dbPath, operation, payload }),
-      encoding: 'utf8',
-      maxBuffer: 10 * 1024 * 1024
-    });
+export function scopedStoredVectorDocumentId(nodeId: string, embeddingProfile: string, chunkerVersion: string): string {
+  return createHash('sha256')
+    .update(`${nodeId}\0${embeddingProfile}\0${chunkerVersion}`)
+    .digest('hex');
+}
 
-    if (child.status !== 0) {
-      throw new Error(child.stderr || `fusion sqlite operation failed: ${operation}`);
+function ensureVectorDocumentChunkerVersion(db: DatabaseSync): void {
+  const columns = db.prepare('PRAGMA table_info(vector_documents)').all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === 'chunker_version')) {
+    db.exec("ALTER TABLE vector_documents ADD COLUMN chunker_version TEXT NOT NULL DEFAULT 'codegraph-node-v1'");
+  }
+}
+
+function buildVectorDocumentListQuery(
+  embeddingProfile?: string,
+  chunkerVersion?: string
+): { sql: string; params: readonly string[] } {
+  const clauses: string[] = [];
+  const params: string[] = [];
+  if (embeddingProfile !== undefined) {
+    clauses.push('embedding_profile = ?');
+    params.push(embeddingProfile);
+  }
+  if (chunkerVersion !== undefined) {
+    clauses.push('chunker_version = ?');
+    params.push(chunkerVersion);
+  }
+  const sql = [
+    'SELECT id,node_id AS nodeId,file_path AS filePath,embedding_profile AS embeddingProfile,chunker_version AS chunkerVersion,json',
+    'FROM vector_documents',
+    clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '',
+    'ORDER BY id'
+  ].filter(Boolean).join(' ');
+  return { sql, params };
+}
+
+function buildVectorDocumentCountQuery(
+  embeddingProfile?: string,
+  chunkerVersion?: string
+): { sql: string; params: readonly string[] } {
+  const clauses: string[] = [];
+  const params: string[] = [];
+  if (embeddingProfile !== undefined) {
+    clauses.push('embedding_profile = ?');
+    params.push(embeddingProfile);
+  }
+  if (chunkerVersion !== undefined) {
+    clauses.push('chunker_version = ?');
+    params.push(chunkerVersion);
+  }
+  const sql = [
+    'SELECT COUNT(*) AS count',
+    'FROM vector_documents',
+    clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''
+  ].filter(Boolean).join(' ');
+  return { sql, params };
+}
+
+function buildManifestEntryListQuery(
+  embeddingProfile?: string,
+  chunkerVersion?: string
+): { sql: string; params: readonly string[] } {
+  const clauses: string[] = [];
+  const params: string[] = [];
+  if (embeddingProfile !== undefined) {
+    clauses.push('embedding_profile = ?');
+    params.push(embeddingProfile);
+  }
+  if (chunkerVersion !== undefined) {
+    clauses.push('chunker_version = ?');
+    params.push(chunkerVersion);
+  }
+  const sql = [
+    'SELECT entry_key AS entryKey,file_path AS filePath,embedding_profile AS embeddingProfile,chunker_version AS chunkerVersion,json',
+    'FROM manifest_entries',
+    clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '',
+    'ORDER BY file_path'
+  ].filter(Boolean).join(' ');
+  return { sql, params };
+}
+
+function readVectorDocumentRow(row: VectorDocumentRow): StoredVectorDocument {
+  return {
+    id: row.id,
+    nodeId: row.nodeId,
+    filePath: row.filePath,
+    embeddingProfile: row.embeddingProfile,
+    chunkerVersion: row.chunkerVersion,
+    json: JSON.parse(row.json)
+  };
+}
+
+function readManifestEntryRow(row: ManifestEntryRow): StoredManifestEntry {
+  return {
+    entryKey: row.entryKey,
+    filePath: row.filePath,
+    embeddingProfile: row.embeddingProfile,
+    chunkerVersion: row.chunkerVersion,
+    json: JSON.parse(row.json)
+  };
+}
+
+function runInTransaction(db: DatabaseSync, action: () => void): void {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    action();
+    db.exec('COMMIT');
+  } catch (error) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      // Ignore rollback failures and rethrow the original error.
     }
-
-    const response = JSON.parse(child.stdout) as FusionResponse<T>;
-    if (!response.ok) {
-      throw new Error(response.error ?? `fusion sqlite operation failed: ${operation}`);
-    }
-    return response.result as T;
+    throw error;
   }
 }

@@ -1,14 +1,49 @@
 import { createHash } from 'node:crypto';
 
-import type { EmbeddingAdapter, EmbeddingResult } from './index.js';
+import type { EmbeddingAdapter, EmbeddingResult } from './registry.js';
 
 export interface LocalTokenEmbeddingOptions {
   dimension?: number;
+  profile?: string;
 }
 
-const DEFAULT_DIMENSION = 64;
+export const DEFAULT_LOCAL_EMBEDDING_DIMENSION = 64;
 const HASH_SPACE = 1_000_003;
 const MIN_TOKEN_LENGTH = 2;
+const SEMANTIC_QUERY_SYNONYMS: Readonly<Record<string, readonly string[]>> = {
+  decide: ['route', 'resolve', 'select'],
+  decides: ['route', 'resolve', 'select'],
+  mixed: ['fusion', 'merge'],
+  multiple: ['multi'],
+  ordering: ['rank', 'ranking', 'order'],
+  ordered: ['rank', 'ranking', 'order'],
+  priority: ['rank', 'ranking', 'order'],
+  relevance: ['rank', 'ranking'],
+  result: ['candidate', 'hit'],
+  results: ['candidate', 'hit'],
+  routing: ['route', 'resolve'],
+  source: ['origin', 'input'],
+  sources: ['origin', 'input']
+};
+
+const SEMANTIC_ROUTING_ANCHOR_TERMS = new Set([
+  'priority',
+  'ordering',
+  'rank',
+  'ranking'
+]);
+const SEMANTIC_ROUTING_TRIGGER_TERMS = new Set([
+  'mixed',
+  'multiple',
+  'results',
+  'search',
+  'sources'
+]);
+const SEMANTIC_ROUTING_HINTS = ['intent', 'parse', 'query', 'route', 'router'];
+
+export interface TokenizeCodeTextOptions {
+  expandSynonyms?: boolean;
+}
 
 export class LocalTokenEmbedding implements EmbeddingAdapter {
   readonly provider = 'local' as const;
@@ -16,8 +51,8 @@ export class LocalTokenEmbedding implements EmbeddingAdapter {
   readonly dimension: number;
 
   constructor(options: LocalTokenEmbeddingOptions = {}) {
-    this.dimension = options.dimension ?? DEFAULT_DIMENSION;
-    this.profile = `local-token-v1:${this.dimension}`;
+    this.dimension = options.dimension ?? DEFAULT_LOCAL_EMBEDDING_DIMENSION;
+    this.profile = options.profile ?? defaultLocalEmbeddingProfile(this.dimension);
   }
 
   async embed(texts: readonly string[]): Promise<EmbeddingResult[]> {
@@ -25,7 +60,11 @@ export class LocalTokenEmbedding implements EmbeddingAdapter {
   }
 }
 
-export function tokenizeCodeText(text: string): string[] {
+export function defaultLocalEmbeddingProfile(dimension = DEFAULT_LOCAL_EMBEDDING_DIMENSION): string {
+  return `local-token-v1:${dimension}`;
+}
+
+export function tokenizeCodeText(text: string, options: TokenizeCodeTextOptions = {}): string[] {
   const spaced = text
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
     .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
@@ -43,8 +82,42 @@ export function tokenizeCodeText(text: string): string[] {
         tokens.add(stem);
       }
     }
+    if (options.expandSynonyms) {
+      for (const synonym of SEMANTIC_QUERY_SYNONYMS[token] ?? []) {
+        if (synonym.length >= MIN_TOKEN_LENGTH) {
+          tokens.add(synonym);
+        }
+      }
+    }
+  }
+  if (options.expandSynonyms) {
+    addSemanticRoutingHints(tokens);
   }
   return [...tokens].sort();
+}
+
+export function expandSemanticQueryTokens(text: string): string[] {
+  return tokenizeCodeText(text, { expandSynonyms: true });
+}
+
+export function expandSemanticQueryText(text: string): string {
+  return expandSemanticQueryTokens(text).join(' ');
+}
+
+export function sparseVectorForText(text: string): Record<number, number> {
+  return sparseVectorFromTokens(tokenizeCodeText(text));
+}
+
+export function sparseVectorFromTokens(tokens: readonly string[]): Record<number, number> {
+  const sparse: Record<number, number> = {};
+  for (const token of new Set(tokens.map((value) => value.trim().toLowerCase()).filter(Boolean))) {
+    if (token.length < MIN_TOKEN_LENGTH) {
+      continue;
+    }
+    const index = stableHash(token) % HASH_SPACE;
+    sparse[index] = (sparse[index] ?? 0) + 1;
+  }
+  return sparse;
 }
 
 function stemsFor(token: string): string[] {
@@ -87,6 +160,17 @@ function embedText(text: string, dimension: number): EmbeddingResult {
 
   normalizeInPlace(dense);
   return { sparse, dense, tokens };
+}
+
+function addSemanticRoutingHints(tokens: Set<string>): void {
+  const hasAnchorTerm = [...SEMANTIC_ROUTING_ANCHOR_TERMS].some((term) => tokens.has(term));
+  const hasTriggerTerm = [...SEMANTIC_ROUTING_TRIGGER_TERMS].some((term) => tokens.has(term));
+  if (!hasAnchorTerm || !hasTriggerTerm) {
+    return;
+  }
+  for (const hint of SEMANTIC_ROUTING_HINTS) {
+    tokens.add(hint);
+  }
 }
 
 function stableHash(text: string): number {

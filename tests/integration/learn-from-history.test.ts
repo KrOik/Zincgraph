@@ -47,6 +47,7 @@ describe('learn from history integration', () => {
   });
 
   afterEach(() => {
+    store.close();
     rmSync(tempDir, { recursive: true, force: true });
   });
 

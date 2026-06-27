@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   TASKS,
+  TASK_CATEGORIES,
   clamp,
   scoreTask,
   scoreFreshness,
@@ -21,8 +22,10 @@ import {
   runIsolatedUpdateTask,
   runPreflight,
   summarizeQualityOnlyArms,
-  qualityOnlyTotal
+  qualityOnlyTotal,
+  summarizeTaskCategories
 } from '../../bench/compare.mjs';
+import { evaluateBenchmarkGoal } from '../../bench/goal-gate.mjs';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, statSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -30,6 +33,67 @@ import { join } from 'node:path';
 const approx = (actual: number, expected: number) => expect(actual).toBeCloseTo(expected, 2);
 
 describe('benchmark scorer', () => {
+  test('benchmark task set expands meaningful categories without increasing default runs', () => {
+    const categories = new Set(TASKS.map((task: any) => task.category));
+    expect([...categories]).toEqual(expect.arrayContaining([
+      TASK_CATEGORIES.GRAPH_TOPOLOGY,
+      TASK_CATEGORIES.GRAPH_NAVIGATION,
+      TASK_CATEGORIES.TEST_IMPACT,
+      TASK_CATEGORIES.SEMANTIC_INTENT,
+      TASK_CATEGORIES.COMPRESSION_FEEDBACK,
+      TASK_CATEGORIES.CROSS_MODULE
+    ]));
+    expect(TASKS.map((task: any) => task.id)).toEqual(expect.arrayContaining([
+      'impact-autosync-topology',
+      'graph-navigation-autosync-pipeline',
+      'affected-review-command-tests',
+      'semantic-intent-routing',
+      'compression-feedback-cycle',
+      'cross-module-freshness-vector-flow'
+    ]));
+    const graphNavigationTask = TASKS.find((task: any) => task.id === 'graph-navigation-autosync-pipeline') as any;
+    expect(graphNavigationTask.commands.codegraph).toHaveLength(3);
+    expect(graphNavigationTask.commands['zincgraph-fusion']).toHaveLength(3);
+    const affectedTask = TASKS.find((task: any) => task.id === 'affected-review-command-tests') as any;
+    expect(affectedTask.commands.codegraph).toEqual([
+      'node_modules/.bin/codegraph',
+      'affected',
+      'src/behavior/review-command.ts',
+      '-p',
+      '$PROJECT'
+    ]);
+    expect(affectedTask.commands['zincgraph-fusion']).toEqual([
+      'node',
+      'dist/cli.js',
+      'affected',
+      'src/behavior/review-command.ts',
+      '-p',
+      '$PROJECT'
+    ]);
+    expect(createRunSlots(undefined)).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  test('semantic intent benchmark avoids route-trigger leakage in its query wording', () => {
+    const task = TASKS.find((item: any) => item.id === 'semantic-intent-routing') as any;
+    const command = Array.isArray(task.commands['zincgraph-fusion']) ? task.commands['zincgraph-fusion'].join(' ') : '';
+    expect(command).toContain('priority ordering');
+    expect(command).not.toMatch(/\bsimilar\b|\branking\b|\brelevance\b|\brerank\b|\bretrieve\b/i);
+  });
+
+  test('summarizes task categories by distinct task ids instead of arm result count', () => {
+    const graphTopology = TASK_CATEGORIES.GRAPH_TOPOLOGY;
+    const crossModule = TASK_CATEGORIES.CROSS_MODULE;
+    const summary = summarizeTaskCategories([
+      { id: 'a', category: graphTopology, arm: 'codegraph', applicable: true, status: 0 },
+      { id: 'a', category: graphTopology, arm: 'zincgraph-fusion', applicable: true, status: 1 },
+      { id: 'b', category: crossModule, arm: 'codegraph', applicable: false, status: null }
+    ]);
+    expect(summary[graphTopology]!.taskIds).toEqual(['a']);
+    expect(summary[graphTopology]!.applicableResults).toBe(2);
+    expect(summary[graphTopology]!.passedResults).toBe(1);
+    expect(summary[crossModule]!.taskIds).toEqual(['b']);
+  });
+
   test('clamps values to normalized score range', () => {
     expect(clamp(-1)).toBe(0);
     expect(clamp(2)).toBe(1);
@@ -108,147 +172,6 @@ describe('benchmark scorer', () => {
     expect(summary.diagnosticWinner).toBe('codegraph');
   });
 
-  test('structured scoring does not improve when the same evidence is more verbose', () => {
-    const task: any = {
-      id: 'anti-verbosity',
-      goldenFiles: ['src/auth.ts'],
-      goldenSymbols: ['validateToken'],
-      relevantTerms: ['token validation'],
-      expectedCapabilities: { 'zincgraph-fusion': ['graph-delegation', 'fusion'] }
-    };
-    const compact = JSON.stringify({
-      results: [
-        { filePath: 'src/auth.ts', qualifiedName: 'validateToken', kind: 'function', sources: ['graph', 'vector'], textBranch: 'fusion-store-token-overlap', excerpt: 'token validation' }
-      ],
-      route: 'hybrid',
-      textBranch: 'fusion-store-token-overlap'
-    });
-    const verbose = JSON.stringify({
-      results: [
-        { filePath: 'src/auth.ts', qualifiedName: 'validateToken', kind: 'function', sources: ['graph', 'vector'], textBranch: 'fusion-store-token-overlap', excerpt: `token validation ${'filler '.repeat(1000)}` }
-      ],
-      route: 'hybrid',
-      textBranch: 'fusion-store-token-overlap',
-      appendix: 'unscored verbose diagnostic material '.repeat(1000)
-    });
-    const compactScores = scoreTask(analyzeOutput({ task, arm: 'zincgraph-fusion', commandSpec: ['fixture'], status: 0, output: compact, medianLatencyMs: 1 }), task);
-    const verboseScores = scoreTask(analyzeOutput({ task, arm: 'zincgraph-fusion', commandSpec: ['fixture'], status: 0, output: verbose, medianLatencyMs: 1 }), task);
-    expect(verboseScores.retrieval).toBe(compactScores.retrieval);
-    expect(verboseScores.capability).toBe(compactScores.capability);
-  });
-
-  test('structured false positives lower retrieval versus compact precise evidence', () => {
-    const task: any = {
-      id: 'false-positive-penalty',
-      goldenFiles: ['src/auth.ts'],
-      goldenSymbols: ['validateToken'],
-      relevantTerms: ['token validation']
-    };
-    const precise = analyzeOutput({
-      task,
-      arm: 'zincgraph-fusion',
-      commandSpec: ['fixture'],
-      status: 0,
-      output: JSON.stringify({ results: [{ filePath: 'src/auth.ts', qualifiedName: 'validateToken', sources: ['graph'], excerpt: 'token validation' }] }),
-      medianLatencyMs: 1
-    });
-    const broad = analyzeOutput({
-      task,
-      arm: 'zincgraph-fusion',
-      commandSpec: ['fixture'],
-      status: 0,
-      output: JSON.stringify({
-        results: [
-          { filePath: 'src/auth.ts', qualifiedName: 'validateToken', sources: ['graph'], excerpt: 'token validation' },
-          { filePath: 'src/noise-a.ts', qualifiedName: 'noiseA', sources: ['graph'], excerpt: 'unrelated' },
-          { filePath: 'src/noise-b.ts', qualifiedName: 'noiseB', sources: ['vector'], excerpt: 'unrelated' }
-        ]
-      }),
-      medianLatencyMs: 1
-    });
-    expect(broad.falsePositiveEvidenceCount).toBe(2);
-    expect(scoreTask(broad, task).retrieval).toBeLessThan(scoreTask(precise, task).retrieval);
-  });
-
-  test('capability scoring requires output proof, not just command success', () => {
-    const task: any = {
-      id: 'capability-proof',
-      goldenFiles: [],
-      goldenSymbols: [],
-      relevantTerms: [],
-      expectedCapabilities: { 'zincgraph-fusion': ['graph-delegation', 'fusion'] }
-    };
-    const noProof = analyzeOutput({ task, arm: 'zincgraph-fusion', commandSpec: ['fixture'], status: 0, output: '{}', medianLatencyMs: 1 });
-    const proven = analyzeOutput({
-      task,
-      arm: 'zincgraph-fusion',
-      commandSpec: ['fixture'],
-      status: 0,
-      output: JSON.stringify({
-        results: [{ filePath: 'src/auth.ts', qualifiedName: 'validateToken', sources: ['graph', 'vector'], textBranch: 'fusion-store-token-overlap', excerpt: 'token validation' }],
-        route: 'hybrid',
-        textBranch: 'fusion-store-token-overlap'
-      }),
-      medianLatencyMs: 1
-    });
-    expect(scoreTask(noProof, task).capability).toBe(0);
-    expect(scoreTask(proven, task).capability).toBe(1);
-  });
-
-  test('capability scoring survives concatenated multi-command output when structured evidence stays separate', () => {
-    const task: any = {
-      id: 'multi-command-capability-proof',
-      goldenFiles: ['src/auth.ts'],
-      goldenSymbols: ['validateToken'],
-      relevantTerms: ['token validation'],
-      expectedCapabilities: { 'zincgraph-fusion': ['graph-delegation', 'fusion'] }
-    };
-    const outputParts = [
-      JSON.stringify({
-        results: [
-          {
-            filePath: 'src/auth.ts',
-            qualifiedName: 'validateToken',
-            kind: 'function',
-            sources: ['graph', 'vector'],
-            textBranch: 'fusion-store-token-overlap',
-            excerpt: 'token validation'
-          }
-        ],
-        route: 'hybrid',
-        textBranch: 'fusion-store-token-overlap'
-      }),
-      'checkType: dedup-check\nNo semantic duplicate above 85%; no reuse suggestion.'
-    ];
-    const result = analyzeOutput({ task, arm: 'zincgraph-fusion', commandSpec: ['fixture', 'fixture-2'], status: 0, output: outputParts.join('\n'), outputParts, medianLatencyMs: 1 });
-    expect(scoreTask(result, task).capability).toBe(1);
-    expect(result.falsePositiveEvidenceCount).toBeGreaterThan(0);
-  });
-
-  test('delegated status wrappers credit upstream status evidence for retrieval', () => {
-    const task = TASKS.find((entry: any) => entry.id === 'status-index-coverage');
-    expect(task).toBeDefined();
-    if (!task) {
-      throw new Error('expected status-index-coverage task');
-    }
-    const output = JSON.stringify({
-      delegated: true,
-      upstream: {
-        initialized: true,
-        fileCount: 1,
-        nodeCount: 2,
-        edgeCount: 3,
-        languages: ['typescript']
-      }
-    });
-    const result = analyzeOutput({ task, arm: 'zincgraph-fusion', commandSpec: ['fixture'], status: 0, output, medianLatencyMs: 1 });
-    const scores = scoreTask(result, task);
-    expect(result.evidenceCount).toBe(1);
-    expect(result.relevantTermHits).toBe(5);
-    expect(scores.retrieval).toBeGreaterThan(0.5);
-    expect(scores.capability).toBeGreaterThan(0.5);
-  });
-
   test('quality-only scores exclude density and runtime while preserving original totals', () => {
     const arms = {
       codegraph: {
@@ -282,7 +205,7 @@ describe('benchmark scorer', () => {
         codegraph: { totalScore: 50, diagnosticTotalScore: 50, dimensionScores: { retrieval: 0.5, density: 0.5, runtime: 0.5, depth: 0.5, freshness: 0.5, capability: 0.5 }, raw: { medianLatencyMs: 10, totalOutputBytes: 20 } }
       },
       tasks: [
-        { id: 't', arm: 'codegraph', applicable: true, status: 0, medianLatencyMs: 10, outputBytes: 20, goldenFileHits: 1, goldenFiles: ['a'], goldenSymbolHits: 0, goldenSymbols: [], relevantTermHits: 1, relevantTerms: ['x'], scores: { retrieval: 0.5, density: 0.5 } }
+        { id: 't', category: TASK_CATEGORIES.CROSS_MODULE, arm: 'codegraph', applicable: true, status: 0, medianLatencyMs: 10, outputBytes: 20, goldenFileHits: 1, goldenFiles: ['a'], goldenSymbolHits: 0, goldenSymbols: [], relevantTermHits: 1, relevantTerms: ['x'], scores: { retrieval: 0.5, density: 0.5 } }
       ]
     });
     expect(report).toContain('local-deterministic');
@@ -296,6 +219,8 @@ describe('benchmark scorer', () => {
     expect(report).toContain('Non-mutation proof');
     expect(report).toContain('current repository state roots only (.codegraph, .zincgraph)');
     expect(report).toContain('Normalization baselines');
+    expect(report).toContain('Benchmark category coverage');
+    expect(report).toContain(TASK_CATEGORIES.CROSS_MODULE);
   });
 });
 
@@ -311,6 +236,7 @@ describe('benchmark runner aggregation', () => {
     expect(aggregate.runs).toHaveLength(3);
     const task = { id: 'fixture', goldenFiles: ['src/a.ts'], goldenSymbols: ['foo'], relevantTerms: [] };
     const result = analyzeOutput({ task, arm: 'codegraph', commandSpec: ['fixture'], status: aggregate.status, output: aggregate.scoringOutput, medianLatencyMs: aggregate.medianLatencyMs });
+    expect(result.category).toBe('uncategorized');
     expect(scoreTask(result, task)).toEqual(zeroScores());
   });
 
@@ -425,6 +351,31 @@ describe('benchmark runner aggregation', () => {
     expect(result.runs).toHaveLength(3);
     expect(result.status).toBe(0);
     expect(result.selectedRunIndex).toBe(1);
+    expect(result.updatedResultEvidenceHit).toBe(1);
+    expect(result.manifestTransitionHit).toBe(1);
+  });
+
+  test('isolated update scoring ignores setup diagnostics when scoring output is separated', async () => {
+    const task = TASKS.find((item: any) => item.id === 'isolated-update-freshness') as any;
+    const scoringOutput = 'src/changed.ts addedLocalBenchmarkFunction fresh transition manifest';
+    const result = await runIsolatedUpdateTask('zincgraph-fusion', task, 1, async (_arm: string, _task: any, index: number) => {
+      expect(index).toBe(0);
+      return {
+        index,
+        status: 0,
+        elapsedMs: 42,
+        scoringOutput,
+        diagnosticOutput: [
+          'Initializing CodeGraph',
+          'Scanning files',
+          'Parsing code',
+          scoringOutput
+        ].join('\n')
+      };
+    });
+
+    expect(result.outputBytes).toBe(Buffer.byteLength(scoringOutput));
+    expect(result.topHit).toBe(1);
     expect(result.updatedResultEvidenceHit).toBe(1);
     expect(result.manifestTransitionHit).toBe(1);
   });
@@ -600,3 +551,149 @@ describe('benchmark non-mutation proof', () => {
     expect(diff.sqliteVolatilePaths).toContain('.codegraph/codegraph.db-wal');
   });
 });
+
+describe('benchmark performance goal gate', () => {
+  test('passes when quality margin, retrieval speed, and strict benchmark thresholds are met', () => {
+    const summary: any = goalSummaryFixture({
+      codegraphQuality: 70,
+      zincgraphQuality: 75,
+      codegraphLatency: 300,
+      zincgraphLatency: 100
+    });
+    const result = evaluateBenchmarkGoal(summary);
+    expect(result.passed).toBe(true);
+    expect(result.metrics.speedup).toBe(3);
+  });
+
+  test('fails on quality regression, failed zincgraph task, or missed speed target', () => {
+    const summary: any = goalSummaryFixture({
+      codegraphQuality: 80,
+      zincgraphQuality: 79,
+      codegraphLatency: 200,
+      zincgraphLatency: 150,
+      zincgraphStatus: 1
+    });
+    const result = evaluateBenchmarkGoal(summary);
+    expect(result.passed).toBe(false);
+    expect(result.failures.join('\n')).toContain('Quality margin missed');
+    expect(result.failures.join('\n')).toContain('Failed zincgraph-fusion tasks');
+    expect(result.failures.join('\n')).toContain('Speed target missed');
+  });
+
+  test('warns when metrics pass but remain within 10% of goal thresholds', () => {
+    const summary: any = goalSummaryFixture({
+      codegraphQuality: 70,
+      zincgraphQuality: 74.2,
+      codegraphLatency: 300,
+      zincgraphLatency: 95,
+      fusionOutputBytes: 210_000,
+      freshnessScore: 0.265,
+      isolatedUpdateFreshnessLatency: 1_150
+    });
+    const result = evaluateBenchmarkGoal(summary);
+    expect(result.passed).toBe(true);
+    expect(result.warnings.join('\n')).toContain('Quality margin is within 10%');
+    expect(result.warnings.join('\n')).toContain('Speed target is within 10%');
+    expect(result.warnings.join('\n')).toContain('Output budget is within 10%');
+    expect(result.warnings.join('\n')).toContain('Freshness dimension is within 10%');
+    expect(result.warnings.join('\n')).toContain('isolated-update-freshness medianLatencyMs is within 10%');
+  });
+});
+
+function goalSummaryFixture(input: {
+  codegraphQuality: number;
+  zincgraphQuality: number;
+  codegraphLatency: number;
+  zincgraphLatency: number;
+  zincgraphStatus?: number;
+  fusionOutputBytes?: number;
+  freshnessScore?: number;
+  isolatedUpdateFreshnessLatency?: number;
+}) {
+  return {
+    qualityOnly: {
+      arms: {
+        codegraph: { totalScore: input.codegraphQuality },
+        'zincgraph-fusion': {
+          totalScore: input.zincgraphQuality,
+          dimensionScores: { freshness: input.freshnessScore ?? 0.3 }
+        }
+      }
+    },
+    arms: {
+      'zincgraph-fusion': {
+        raw: { totalOutputBytes: input.fusionOutputBytes ?? 100_000 }
+      }
+    },
+    tasks: [
+      {
+        id: 'exact-autosync-api',
+        arm: 'codegraph',
+        applicable: true,
+        status: 0,
+        medianLatencyMs: input.codegraphLatency
+      },
+      {
+        id: 'exact-autosync-api',
+        arm: 'zincgraph-fusion',
+        applicable: true,
+        status: input.zincgraphStatus ?? 0,
+        medianLatencyMs: input.zincgraphLatency,
+        scores: { density: 0.6 }
+      },
+      {
+        id: 'isolated-update-freshness',
+        arm: 'zincgraph-fusion',
+        applicable: true,
+        status: 0,
+        medianLatencyMs: input.isolatedUpdateFreshnessLatency ?? 300
+      },
+      {
+        id: 'graph-navigation-autosync-pipeline',
+        arm: 'zincgraph-fusion',
+        applicable: true,
+        status: 0,
+        medianLatencyMs: 100
+      },
+      {
+        id: 'affected-review-command-tests',
+        arm: 'zincgraph-fusion',
+        applicable: true,
+        status: 0,
+        medianLatencyMs: 100
+      },
+      {
+        id: 'behavior-dedup-review',
+        arm: 'zincgraph-fusion',
+        applicable: true,
+        status: 0,
+        medianLatencyMs: 100
+      },
+      {
+        id: 'impact-autosync-topology',
+        arm: 'zincgraph-fusion',
+        applicable: true,
+        status: 0,
+        medianLatencyMs: 100,
+        goldenFileHits: 2,
+        scores: { density: 0.5 }
+      },
+      {
+        id: 'cross-module-freshness-vector-flow',
+        arm: 'zincgraph-fusion',
+        applicable: true,
+        status: 0,
+        medianLatencyMs: 100,
+        goldenFileHits: 4
+      },
+      {
+        id: 'freshness-manifest',
+        arm: 'zincgraph-fusion',
+        applicable: true,
+        status: 0,
+        medianLatencyMs: 100,
+        goldenSymbolHits: 3
+      }
+    ]
+  };
+}

@@ -2,28 +2,34 @@ import { HTTPEmbedding } from './http.js';
 import type { EmbeddingAdapter, EmbeddingBatchResult, EmbeddingResult } from './registry.js';
 import { NetworkPolicy } from '../network-policy.js';
 
-export interface QwenEmbeddingOptions {
+export interface SiliconFlowEmbeddingOptions {
   apiKey?: string;
   model?: string;
   baseUrl?: string;
   profile?: string;
 }
 
-export class QwenEmbedding implements EmbeddingAdapter {
-  readonly provider = 'qwen' as const;
+const DEFAULT_SILICONFLOW_MODEL = 'BAAI/bge-m3';
+const DEFAULT_SILICONFLOW_ENDPOINT = 'https://api.siliconflow.cn/v1/embeddings';
+
+export class SiliconFlowEmbedding implements EmbeddingAdapter {
+  readonly provider = 'siliconflow' as const;
   readonly profile: string;
   private readonly apiKey: string | undefined;
   private readonly delegate: HTTPEmbedding;
 
   constructor(
     private readonly networkPolicy = NetworkPolicy.disabled(),
-    options: QwenEmbeddingOptions = {}
+    options: SiliconFlowEmbeddingOptions = {}
   ) {
-    this.apiKey = options.apiKey ?? process.env.ZINCGRAPH_QWEN_API_KEY;
-    const model = options.model ?? 'text-embedding-v4';
-    this.profile = options.profile ?? `qwen:${model}`;
+    this.apiKey = options.apiKey
+      ?? process.env.ZINCGRAPH_SILICONFLOW_API_KEY
+      ?? process.env.SILICONFLOW_API_KEY
+      ?? process.env.silicon;
+    const model = options.model ?? DEFAULT_SILICONFLOW_MODEL;
+    this.profile = options.profile ?? `siliconflow:${model}`;
     this.delegate = new HTTPEmbedding(networkPolicy, {
-      endpoint: options.baseUrl ?? 'https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings',
+      endpoint: options.baseUrl ?? DEFAULT_SILICONFLOW_ENDPOINT,
       model,
       profile: this.profile,
       provider: this.provider,
@@ -36,10 +42,12 @@ export class QwenEmbedding implements EmbeddingAdapter {
   async embed(texts: readonly string[]): Promise<EmbeddingResult[]> {
     this.networkPolicy.assertAllowed(this.provider);
     if (!this.apiKey) {
-      throw new Error('QwenEmbedding requires an API key via options.apiKey or ZINCGRAPH_QWEN_API_KEY.');
+      throw new Error(
+        'SiliconFlowEmbedding requires an API key via options.apiKey, ZINCGRAPH_SILICONFLOW_API_KEY, SILICONFLOW_API_KEY, or silicon.'
+      );
     }
     if (!this.profile.startsWith(`${this.provider}:`)) {
-      throw new Error(`QwenEmbedding profile must start with ${this.provider}:. Received ${this.profile}.`);
+      throw new Error(`SiliconFlowEmbedding profile must start with ${this.provider}:. Received ${this.profile}.`);
     }
     return this.delegate.embed(texts);
   }
@@ -51,7 +59,7 @@ export class QwenEmbedding implements EmbeddingAdapter {
         error: {
           provider: this.provider,
           kind: 'auth-config',
-          message: 'QwenEmbedding requires an API key via options.apiKey or ZINCGRAPH_QWEN_API_KEY.',
+          message: 'SiliconFlowEmbedding requires an API key via options.apiKey, ZINCGRAPH_SILICONFLOW_API_KEY, SILICONFLOW_API_KEY, or silicon.',
           retryable: false
         }
       };
@@ -62,7 +70,7 @@ export class QwenEmbedding implements EmbeddingAdapter {
         error: {
           provider: this.provider,
           kind: 'auth-config',
-          message: `QwenEmbedding profile must start with ${this.provider}:. Received ${this.profile}.`,
+          message: `SiliconFlowEmbedding profile must start with ${this.provider}:. Received ${this.profile}.`,
           retryable: false
         }
       };

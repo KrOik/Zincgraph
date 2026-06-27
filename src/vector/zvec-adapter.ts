@@ -74,11 +74,18 @@ export function zincgraphDataDir(projectPath: string): string {
   return join(resolve(projectPath), ZINCGRAPH_DIR);
 }
 
-export function collectionPath(projectPath: string, chunkerVersion = DEFAULT_CHUNKER_VERSION): string {
-  return join(zincgraphDataDir(projectPath), chunkerCollectionDirectory(chunkerVersion));
+export function collectionPath(
+  projectPath: string,
+  options: { embeddingProfile: string; chunkerVersion?: string }
+): string {
+  return join(
+    zincgraphDataDir(projectPath),
+    embeddingCollectionDirectory(options.embeddingProfile),
+    chunkerCollectionDirectory(options.chunkerVersion ?? DEFAULT_CHUNKER_VERSION)
+  );
 }
 
-export function createCodeCollectionSchema(): ZVecCollectionSchema {
+export function createCodeCollectionSchema(dimension = CODE_VECTOR_DIMENSION): ZVecCollectionSchema {
   return new ZVecCollectionSchema({
     name: 'zincgraph_code_vectors',
     vectors: [
@@ -93,7 +100,7 @@ export function createCodeCollectionSchema(): ZVecCollectionSchema {
       {
         name: 'embedding',
         dataType: ZVecDataType.VECTOR_FP32,
-        dimension: CODE_VECTOR_DIMENSION,
+        dimension,
         indexParams: {
           indexType: ZVecIndexType.HNSW,
           metricType: ZVecMetricType.COSINE
@@ -112,20 +119,29 @@ export function createCodeCollectionSchema(): ZVecCollectionSchema {
   });
 }
 
-export function createRawCollection(projectPath: string): ZVecCollection {
+export function createRawCollection(
+  projectPath: string,
+  options: { embeddingProfile: string; chunkerVersion?: string; dimension?: number }
+): ZVecCollection {
   initializeZvec();
-  const path = collectionPath(projectPath);
+  const path = collectionPath(projectPath, options);
   mkdirSync(dirname(path), { recursive: true });
-  return ZVecCreateAndOpen(path, createCodeCollectionSchema());
+  return ZVecCreateAndOpen(path, createCodeCollectionSchema(options.dimension));
 }
 
-export function openRawCollection(projectPath: string): ZVecCollection {
+export function openRawCollection(
+  projectPath: string,
+  options: { embeddingProfile: string; chunkerVersion?: string }
+): ZVecCollection {
   initializeZvec();
-  return ZVecOpen(collectionPath(projectPath));
+  return ZVecOpen(collectionPath(projectPath, options));
 }
 
-export function dropRawCollection(projectPath: string): void {
-  rmSync(collectionPath(projectPath), { force: true, recursive: true });
+export function dropRawCollection(
+  projectPath: string,
+  options: { embeddingProfile: string; chunkerVersion?: string }
+): void {
+  rmSync(collectionPath(projectPath, options), { force: true, recursive: true });
 }
 
 export function toZvecDoc(document: VectorDocumentInput): ZVecDocInput {
@@ -171,6 +187,14 @@ export function escapeZvecStringLiteral(value: string): string {
 
 export function filterEquals(field: 'file_path' | 'language' | 'kind', value: string): string {
   return `${field} = '${escapeZvecStringLiteral(value)}'`;
+}
+
+function embeddingCollectionDirectory(embeddingProfile: string): string {
+  return `embedding-${safeCollectionSegment(embeddingProfile)}`;
+}
+
+function safeCollectionSegment(value: string): string {
+  return value.replace(/[^a-z0-9._-]+/gi, '-').replace(/^-+|-+$/g, '') || 'default';
 }
 
 export type { ZVecCollection, ZVecQuery };

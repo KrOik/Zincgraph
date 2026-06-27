@@ -1,5 +1,20 @@
 export const WEIGHTS: Record<string, number>;
 export const QUALITY_WEIGHTS: Record<string, number>;
+export const TASK_CATEGORIES: {
+  readonly SYMBOL_RETRIEVAL: 'symbol-retrieval';
+  readonly WORKFLOW_DISCOVERY: 'workflow-discovery';
+  readonly TOOL_SURFACE: 'tool-surface';
+  readonly FRESHNESS: 'freshness';
+  readonly BEHAVIOR_ANALYSIS: 'behavior-analysis';
+  readonly INDEX_STATUS: 'index-status';
+  readonly INCREMENTAL_UPDATE: 'incremental-update';
+  readonly GRAPH_TOPOLOGY: 'graph-topology';
+  readonly GRAPH_NAVIGATION: 'graph-navigation';
+  readonly TEST_IMPACT: 'test-impact';
+  readonly SEMANTIC_INTENT: 'semantic-intent';
+  readonly COMPRESSION_FEEDBACK: 'compression-feedback';
+  readonly CROSS_MODULE: 'cross-module-integration';
+};
 export const TASKS: readonly unknown[];
 export function clamp(value: number): number;
 export interface DimensionScores { retrieval: number; density: number; runtime: number; depth: number; freshness: number; capability: number }
@@ -9,6 +24,7 @@ export function densityRawFor(result: Record<string, any>): number;
 export function summarizeArmScores(tasks: Array<Record<string, any>>, includeDelegatedInWinner?: boolean): { arms: Record<string, any>; winner: string | null; diagnosticWinner: string | null };
 export function summarizeQualityOnlyArms(arms: Record<string, any>): { weights: Record<string, number>; arms: Record<string, any>; winner: string | null };
 export function qualityOnlyTotal(dimensionScores: Record<string, number>, weights?: Record<string, number>): number;
+export function summarizeTaskCategories(tasks: Array<Record<string, any>>): Record<string, { taskIds: string[]; arms: string[]; totalResults: number; applicableResults: number; passedResults: number }>;
 export function createReport(summary: Record<string, any>): string;
 export function fingerprintRoots(projectPath: string, roots?: string[]): Record<string, any>;
 export function diffFingerprints(before: Record<string, any>, after: Record<string, any>): { changedPaths: string[]; sqliteVolatilePaths: string[] };

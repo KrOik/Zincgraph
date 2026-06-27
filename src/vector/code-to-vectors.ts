@@ -1,46 +1,58 @@
 import { createHash } from 'node:crypto';
-import { closeSync, existsSync, openSync, readSync, realpathSync, statSync, type Stats } from 'node:fs';
-import { isAbsolute, join, relative, resolve } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { isAbsolute, relative, resolve } from 'node:path';
 
-import { runCodeGraphCli } from '../bridge/codegraphAdapter.js';
-import { FusionStore } from '../freshness/fusion-store.js';
+import { FusionStore, fusionStorePath, scopedStoredVectorDocumentId } from '../freshness/fusion-store.js';
 import { VectorManifestStore } from '../freshness/manifest.js';
 import { SemanticStatus } from '../freshness/semantic-status.js';
-import { openCollection } from './collection-manager.js';
-import { getAdapter, type EmbeddingAdapter } from './embedding/index.js';
+import { openCollection, type CodeVectorCollection } from './collection-manager.js';
+import {
+  embedOrThrow,
+  getAdapter,
+  resolveActiveEmbedding,
+  tokenizeCodeText,
+  type ActiveEmbeddingConfigInput,
+  type EmbeddingAdapter,
+  type ResolvedEmbeddingConfig
+} from './embedding/index.js';
+import { cacheResolvedEmbedding } from './embedding/config.js';
 import type { VectorDocumentInput } from './zvec-adapter.js';
 import { DEFAULT_CHUNKER_VERSION } from './chunker.js';
+import {
+  MAX_SOURCE_FILE_READ_BYTES,
+  MAX_SOURCE_SNIPPET_LINES,
+  MAX_SOURCE_SNIPPET_CHARS,
+  MEANINGFUL_NODE_KINDS,
+  applyCodeGraphSnapshotReadOptions,
+  readCodeGraphSnapshot,
+  safeSourceSnippet,
+  updateCodeGraphSnapshotCacheFromFiles,
+  type ReadCodeGraphSnapshotOptions,
+  type CodeGraphSnapshot,
+  type CodeGraphSnapshotFile,
+  type CodeGraphSnapshotNode,
+  type SourceSnippetIo,
+  writeCodeGraphSnapshotCache
+} from './codegraph-snapshot.js';
 
-export const MEANINGFUL_NODE_KINDS = ['function', 'class', 'method', 'interface', 'component'] as const;
 export const DEFAULT_EMBEDDING_PROVIDER = 'local';
-
-export interface CodeGraphSnapshotNode {
-  id: string;
-  kind: string;
-  name: string;
-  qualifiedName: string;
-  filePath: string;
-  language: string;
-  startLine?: number;
-  endLine?: number;
-  docstring?: string;
-  signature?: string;
-  sourceSnippet?: string;
-  calls: string[];
-}
-
-export interface CodeGraphSnapshotFile {
-  path: string;
-  contentHash: string;
-  language: string;
-}
-
-export interface CodeGraphSnapshot {
-  projectPath: string;
-  nodes: CodeGraphSnapshotNode[];
-  files: CodeGraphSnapshotFile[];
-}
+export {
+  MAX_SOURCE_FILE_READ_BYTES,
+  MAX_SOURCE_SNIPPET_LINES,
+  MAX_SOURCE_SNIPPET_CHARS,
+  MEANINGFUL_NODE_KINDS,
+  applyCodeGraphSnapshotReadOptions,
+  readCodeGraphSnapshot,
+  safeSourceSnippet,
+  updateCodeGraphSnapshotCacheFromFiles,
+  writeCodeGraphSnapshotCache
+};
+export type {
+  CodeGraphSnapshot,
+  CodeGraphSnapshotFile,
+  CodeGraphSnapshotNode,
+  SourceSnippetIo
+};
 
 export interface VectorDocument {
   id: string;
@@ -55,6 +67,17 @@ export interface VectorDocument {
   tokens: string[];
   contentSparse: Record<number, number>;
   embedding: number[];
+  semanticAliases?: string[];
+  semanticNeighbors?: VectorDocumentSemanticNeighbor[];
+}
+
+export interface VectorDocumentSemanticNeighbor {
+  nodeId: string;
+  qualifiedName: string;
+  filePath: string;
+  kind: string;
+  score: number;
+  relationship: 'same-file' | 'semantic-overlap';
 }
 
 export interface VectorizeResult {
@@ -63,87 +86,35 @@ export interface VectorizeResult {
   fusionDbPath: string;
   filesFresh: number;
   documentsWritten: number;
+  totalDocuments: number;
+  refreshedFiles?: Array<{ path: string; contentHash: string; docIds: string[] }>;
   manifestWarnings: string[];
 }
 
-const SNAPSHOT_SCRIPT = String.raw`
-import json
-import os
-import sqlite3
-import sys
-
-project = os.path.abspath(json.loads(sys.stdin.read())["projectPath"])
-db_path = os.path.join(project, ".codegraph", "codegraph.db")
-if not os.path.exists(db_path):
-    raise SystemExit(f"CodeGraph database not found: {db_path}")
-con = sqlite3.connect(db_path)
-con.row_factory = sqlite3.Row
-kinds = ("function", "class", "method", "interface", "component")
-placeholders = ",".join("?" for _ in kinds)
-nodes = []
-for row in con.execute(f"SELECT * FROM nodes WHERE kind IN ({placeholders}) ORDER BY file_path,start_line,name", kinds):
-    calls = [r["name"] for r in con.execute(
-        "SELECT t.name FROM edges e JOIN nodes t ON t.id=e.target WHERE e.source=? AND e.kind='calls' ORDER BY t.name",
-        (row["id"],),
-    )]
-    nodes.append({
-        "id": row["id"],
-        "kind": row["kind"],
-        "name": row["name"],
-        "qualifiedName": row["qualified_name"],
-        "filePath": row["file_path"],
-        "language": row["language"],
-        "startLine": row["start_line"],
-        "endLine": row["end_line"],
-        "docstring": row["docstring"],
-        "signature": row["signature"],
-        "calls": calls,
-    })
-files = [{"path": row["path"], "contentHash": row["content_hash"], "language": row["language"]}
-         for row in con.execute("SELECT path,content_hash,language FROM files ORDER BY path")]
-con.close()
-print(json.dumps({"projectPath": project, "nodes": nodes, "files": files}, sort_keys=True))
-`;
-
-export const MAX_SOURCE_SNIPPET_LINES = 80;
-export const MAX_SOURCE_SNIPPET_CHARS = 6_000;
-export const MAX_SOURCE_FILE_READ_BYTES = 1_048_576;
-
-export interface SourceSnippetIo {
-  realpath(path: string): string;
-  stat(path: string): Pick<Stats, 'isFile' | 'size'>;
-  readFilePrefix(path: string, maxBytes: number): string;
+export interface VectorizeProjectDependencies {
+  adapter?: EmbeddingAdapter;
+  readSnapshot?: (projectPath: string, options?: ReadCodeGraphSnapshotOptions) => CodeGraphSnapshot;
 }
 
-export function ensureCodeGraphIndex(projectPath: string): void {
-  const projectRoot = resolve(projectPath);
-  const dbPath = join(projectRoot, '.codegraph', 'codegraph.db');
-  if (!existsSync(dbPath)) {
-    const init = runCodeGraphCli(['init', projectRoot]);
-    if (init.status !== 0) {
-      throw new Error(init.stderr || init.stdout || 'CodeGraph init failed');
-    }
-  }
+export interface VectorizeProjectOptions {
+  changedFiles?: readonly string[];
+  embedding?: ActiveEmbeddingConfigInput;
+  dependencies?: VectorizeProjectDependencies;
 }
-
-export function readCodeGraphSnapshot(projectPath: string): CodeGraphSnapshot {
-  ensureCodeGraphIndex(projectPath);
-  const projectRoot = resolve(projectPath);
-  const py = process.platform === 'win32' ? 'python' : 'python3';
-  const child = spawnSync(py, ['-c', SNAPSHOT_SCRIPT], {
-    input: JSON.stringify({ projectPath: projectRoot }),
-    encoding: 'utf8',
-    maxBuffer: 10 * 1024 * 1024
-  });
-  if (child.status !== 0) {
-    throw new Error(child.stderr || `Failed to read CodeGraph snapshot for ${projectRoot}`);
-  }
-  return attachSourceSnippets(JSON.parse(child.stdout) as CodeGraphSnapshot, projectRoot);
-}
-
+const MAX_SEMANTIC_NEIGHBORS = 4;
+const MAX_SEMANTIC_ALIASES = 12;
+const MIN_SEMANTIC_TOKEN_LENGTH = 3;
+const MAX_SHARED_TOKEN_FREQUENCY_RATIO = 0.35;
+const SAME_FILE_NEIGHBOR_BONUS = 0.45;
+const ISOLATED_SAME_FILE_BONUS = 0.2;
+const GRAPH_RELATION_BONUS = 0.3;
+const TOKEN_OVERLAP_THRESHOLD = 0.18;
 export function buildNodeText(node: CodeGraphSnapshotNode): string {
   return [
     `path ${node.filePath}`,
+    `kind ${node.kind}`,
+    `language ${node.language}`,
+    `qualified ${node.qualifiedName}`,
     node.signature || node.qualifiedName || node.name,
     node.docstring ?? '',
     node.sourceSnippet ? `source\n${node.sourceSnippet}` : '',
@@ -153,19 +124,48 @@ export function buildNodeText(node: CodeGraphSnapshotNode): string {
     .join('\n');
 }
 
+interface SemanticBridge {
+  aliases: string[];
+  neighbors: VectorDocumentSemanticNeighbor[];
+}
+
+interface GraphRelations {
+  relatedByNodeId: Map<string, Set<string>>;
+}
+
+interface NodeReferenceIndex {
+  exact: Map<string, Set<string>>;
+  token: Map<string, Set<string>>;
+}
+
+interface SemanticDescriptor {
+  node: CodeGraphSnapshotNode;
+  baseContent: string;
+  baseTokens: string[];
+  pathTokens: string[];
+  callTokens: string[];
+  incomingCallCount: number;
+}
+
 export async function createVectorDocuments(
   snapshot: CodeGraphSnapshot,
-  adapter: EmbeddingAdapter = getAdapter(DEFAULT_EMBEDDING_PROVIDER)
+  adapter: EmbeddingAdapter = getAdapter(DEFAULT_EMBEDDING_PROVIDER),
+  nodes: readonly CodeGraphSnapshotNode[] = snapshot.nodes,
+  chunkerVersion = DEFAULT_CHUNKER_VERSION
 ): Promise<VectorDocument[]> {
-  const contents = snapshot.nodes.map(buildNodeText);
-  const embeddings = await adapter.embed(contents);
-  return snapshot.nodes.map((node, index) => {
+  const baseContentByNode = new Map(snapshot.nodes.map((node) => [node.id, buildNodeText(node)]));
+  const bridges = buildSemanticBridges(snapshot, baseContentByNode);
+  const contents = nodes.map((node) => appendSemanticBridgeText(baseContentByNode.get(node.id) ?? buildNodeText(node), bridges.get(node.id)));
+  const embeddings = await embedOrThrow(adapter, contents);
+  const contentHashByPath = new Map(snapshot.files.map((file) => [file.path, file.contentHash]));
+  return nodes.map((node, index) => {
     const embedding = embeddings[index];
     if (!embedding) {
       throw new Error(`Missing embedding result for ${node.id}`);
     }
+    const bridge = bridges.get(node.id);
     const content = contents[index] ?? node.qualifiedName;
-    const fileHash = snapshot.files.find((file) => file.path === node.filePath)?.contentHash ?? hashText(content);
+    const fileHash = contentHashByPath.get(node.filePath) ?? hashText(content);
     return {
       id: node.id,
       nodeId: node.id,
@@ -175,161 +175,516 @@ export async function createVectorDocuments(
       qualifiedName: node.qualifiedName,
       content,
       contentHash: fileHash,
-      chunkerVersion: DEFAULT_CHUNKER_VERSION,
+      chunkerVersion,
       tokens: embedding.tokens,
       contentSparse: embedding.sparse,
-      embedding: embedding.dense
+      embedding: embedding.dense,
+      ...(bridge?.aliases.length ? { semanticAliases: bridge.aliases } : {}),
+      ...(bridge?.neighbors.length ? { semanticNeighbors: bridge.neighbors } : {})
     };
   });
 }
 
-export async function vectorizeProject(projectPath: string): Promise<VectorizeResult> {
+function buildSemanticBridges(
+  snapshot: CodeGraphSnapshot,
+  baseContentByNode: ReadonlyMap<string, string>
+): Map<string, SemanticBridge> {
+  const incomingCallCounts = countIncomingCalls(snapshot);
+  const graphRelations = buildGraphRelations(snapshot);
+  const descriptors = snapshot.nodes.map((node) => {
+    const baseContent = baseContentByNode.get(node.id) ?? buildNodeText(node);
+    return {
+      node,
+      baseContent,
+      baseTokens: tokenizeCodeText(baseContent),
+      pathTokens: tokenizeCodeText(node.filePath),
+      callTokens: tokenizeCodeText(node.calls.join(' ')),
+      incomingCallCount: incomingCallCounts.get(node.name.toLowerCase()) ?? 0
+    } satisfies SemanticDescriptor;
+  });
+  const descriptorById = new Map(descriptors.map((descriptor) => [descriptor.node.id, descriptor]));
+  const descriptorsByFile = new Map<string, SemanticDescriptor[]>();
+  for (const descriptor of descriptors) {
+    const list = descriptorsByFile.get(descriptor.node.filePath) ?? [];
+    list.push(descriptor);
+    descriptorsByFile.set(descriptor.node.filePath, list);
+  }
+
+  const tokenIndex = new Map<string, Set<string>>();
+  for (const descriptor of descriptors) {
+    for (const token of descriptor.baseTokens) {
+      if (token.length < MIN_SEMANTIC_TOKEN_LENGTH) {
+        continue;
+      }
+      const bucket = tokenIndex.get(token) ?? new Set<string>();
+      bucket.add(descriptor.node.id);
+      tokenIndex.set(token, bucket);
+    }
+  }
+
+  const maxSharedTokenFrequency = Math.max(2, Math.ceil(descriptors.length * MAX_SHARED_TOKEN_FREQUENCY_RATIO));
+  const bridges = new Map<string, SemanticBridge>();
+
+  for (const descriptor of descriptors) {
+    const candidateIds = new Set<string>();
+    for (const peer of descriptorsByFile.get(descriptor.node.filePath) ?? []) {
+      if (peer.node.id !== descriptor.node.id) {
+        candidateIds.add(peer.node.id);
+      }
+    }
+    for (const relatedId of graphRelations.relatedByNodeId.get(descriptor.node.id) ?? []) {
+      if (relatedId !== descriptor.node.id) {
+        candidateIds.add(relatedId);
+      }
+    }
+    for (const token of descriptor.baseTokens) {
+      if (token.length < MIN_SEMANTIC_TOKEN_LENGTH) {
+        continue;
+      }
+      const bucket = tokenIndex.get(token);
+      if (!bucket || bucket.size > maxSharedTokenFrequency) {
+        continue;
+      }
+      for (const candidateId of bucket) {
+        if (candidateId !== descriptor.node.id) {
+          candidateIds.add(candidateId);
+        }
+      }
+    }
+
+    const relationDegree = descriptor.node.calls.length + descriptor.incomingCallCount;
+    const neighbors = [...candidateIds]
+      .map((candidateId) => {
+        const other = descriptorById.get(candidateId);
+        if (!other) {
+          return null;
+        }
+        const sameFile = other.node.filePath === descriptor.node.filePath;
+        const sharedBaseTokens = intersectCount(descriptor.baseTokens, other.baseTokens);
+        const sharedPathTokens = intersectCount(descriptor.pathTokens, other.pathTokens);
+        const sharedCallTokens = intersectCount(descriptor.callTokens, other.callTokens);
+        const graphRelationBonus = graphRelations.relatedByNodeId.get(descriptor.node.id)?.has(other.node.id) ? GRAPH_RELATION_BONUS : 0;
+        let score = 0;
+        if (sameFile) {
+          score += SAME_FILE_NEIGHBOR_BONUS;
+          if (relationDegree === 0) {
+            score += ISOLATED_SAME_FILE_BONUS;
+          }
+        }
+        score += graphRelationBonus;
+        score += sharedBaseTokens / Math.max(2, Math.min(descriptor.baseTokens.length, other.baseTokens.length));
+        score +=
+          (sharedPathTokens / Math.max(1, Math.min(descriptor.pathTokens.length, other.pathTokens.length))) * 0.25;
+        score +=
+          (sharedCallTokens / Math.max(1, Math.min(descriptor.callTokens.length, other.callTokens.length))) * 0.2;
+        if (!sameFile && score < TOKEN_OVERLAP_THRESHOLD) {
+          return null;
+        }
+        return {
+          nodeId: other.node.id,
+          qualifiedName: other.node.qualifiedName,
+          filePath: other.node.filePath,
+          kind: other.node.kind,
+          score: Number(score.toFixed(3)),
+          relationship: sameFile ? 'same-file' as const : 'semantic-overlap' as const
+        };
+      })
+      .filter((neighbor): neighbor is VectorDocumentSemanticNeighbor => neighbor !== null)
+      .sort((left, right) => {
+        const scoreDelta = right.score - left.score;
+        if (scoreDelta !== 0) {
+          return scoreDelta;
+        }
+        return left.nodeId.localeCompare(right.nodeId);
+      })
+      .slice(0, MAX_SEMANTIC_NEIGHBORS);
+
+    const aliases = collectSemanticAliases(descriptor, neighbors, descriptorById);
+    bridges.set(descriptor.node.id, { aliases, neighbors });
+  }
+
+  return bridges;
+}
+
+function collectSemanticAliases(
+  descriptor: SemanticDescriptor,
+  neighbors: readonly VectorDocumentSemanticNeighbor[],
+  descriptorById: ReadonlyMap<string, SemanticDescriptor>
+): string[] {
+  const aliases: string[] = [];
+  const seen = new Set<string>();
+
+  for (const neighbor of neighbors) {
+    const neighborDescriptor = descriptorById.get(neighbor.nodeId);
+    const candidates = [
+      neighborDescriptor?.node.name,
+      neighbor.qualifiedName
+    ];
+    for (const candidate of candidates) {
+      const value = candidate?.trim();
+      if (!value || seen.has(value) || descriptor.baseContent.includes(value)) {
+        continue;
+      }
+      seen.add(value);
+      aliases.push(value);
+      if (aliases.length >= MAX_SEMANTIC_ALIASES) {
+        return aliases;
+      }
+    }
+  }
+
+  return aliases;
+}
+
+function appendSemanticBridgeText(baseContent: string, bridge: SemanticBridge | undefined): string {
+  if (!bridge || (bridge.aliases.length === 0 && bridge.neighbors.length === 0)) {
+    return baseContent;
+  }
+  const parts = [baseContent];
+  if (bridge.aliases.length > 0) {
+    parts.push('semantic aliases');
+    parts.push(...bridge.aliases);
+  }
+  if (bridge.neighbors.length > 0) {
+    parts.push('semantic neighbors');
+    parts.push(...bridge.neighbors.map((neighbor) => `${neighbor.relationship} ${neighbor.qualifiedName}`));
+  }
+  return parts.join('\n');
+}
+
+function countIncomingCalls(snapshot: CodeGraphSnapshot): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const node of snapshot.nodes) {
+    for (const call of node.calls) {
+      const key = call.trim().toLowerCase();
+      if (!key) {
+        continue;
+      }
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+  }
+  return counts;
+}
+
+function buildGraphRelations(snapshot: CodeGraphSnapshot): GraphRelations {
+  const referenceIndex = buildNodeReferenceIndex(snapshot);
+  const relatedByNodeId = new Map<string, Set<string>>();
+
+  for (const node of snapshot.nodes) {
+    const related = relatedByNodeId.get(node.id) ?? new Set<string>();
+    for (const call of node.calls) {
+      for (const targetId of resolveNodeReferenceIds(call, referenceIndex)) {
+        if (targetId === node.id) {
+          continue;
+        }
+        related.add(targetId);
+        const reverse = relatedByNodeId.get(targetId) ?? new Set<string>();
+        reverse.add(node.id);
+        relatedByNodeId.set(targetId, reverse);
+      }
+    }
+    relatedByNodeId.set(node.id, related);
+  }
+
+  return { relatedByNodeId };
+}
+
+function buildNodeReferenceIndex(snapshot: CodeGraphSnapshot): NodeReferenceIndex {
+  const exact = new Map<string, Set<string>>();
+  const token = new Map<string, Set<string>>();
+  for (const node of snapshot.nodes) {
+    registerNodeReference(exact, node.name, node.id, false);
+    registerNodeReference(exact, node.qualifiedName, node.id, false);
+    registerNodeReference(token, node.name, node.id, true);
+    registerNodeReference(token, node.qualifiedName, node.id, true);
+  }
+  return { exact, token };
+}
+
+function registerNodeReference(
+  index: Map<string, Set<string>>,
+  reference: string,
+  nodeId: string,
+  tokenized: boolean
+): void {
+  const normalized = normalizeReferenceKey(reference);
+  if (normalized) {
+    addToIndex(index, normalized, nodeId);
+  }
+  if (!tokenized) {
+    return;
+  }
+  for (const token of tokenizeCodeText(reference)) {
+    if (token.length < MIN_SEMANTIC_TOKEN_LENGTH) {
+      continue;
+    }
+    addToIndex(index, token, nodeId);
+  }
+}
+
+function resolveNodeReferenceIds(reference: string, index: NodeReferenceIndex): string[] {
+  const normalized = normalizeReferenceKey(reference);
+  if (normalized) {
+    const exactMatches = index.exact.get(normalized);
+    if (exactMatches && exactMatches.size > 0) {
+      return [...exactMatches];
+    }
+  }
+
+  const matches = new Set<string>();
+  for (const token of tokenizeCodeText(reference)) {
+    if (token.length < MIN_SEMANTIC_TOKEN_LENGTH) {
+      continue;
+    }
+    const bucket = index.token.get(token);
+    if (!bucket) {
+      continue;
+    }
+    for (const nodeId of bucket) {
+      matches.add(nodeId);
+    }
+  }
+  return [...matches];
+}
+
+function addToIndex(index: Map<string, Set<string>>, key: string, nodeId: string): void {
+  const bucket = index.get(key) ?? new Set<string>();
+  bucket.add(nodeId);
+  index.set(key, bucket);
+}
+
+function normalizeReferenceKey(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function intersectCount(left: readonly string[], right: readonly string[]): number {
+  if (left.length === 0 || right.length === 0) {
+    return 0;
+  }
+  const rightSet = new Set(right);
+  let count = 0;
+  for (const token of left) {
+    if (rightSet.has(token)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+export async function vectorizeProject(projectPath: string, options: VectorizeProjectOptions = {}): Promise<VectorizeResult> {
   const projectRoot = resolve(projectPath);
-  const snapshot = readCodeGraphSnapshot(projectRoot);
-  const adapter = getAdapter(DEFAULT_EMBEDDING_PROVIDER);
-  const documents = await createVectorDocuments(snapshot, adapter);
-  const collection = openCollection(projectRoot);
-  const fusionStore = new FusionStore(projectRoot);
-  const manifest = new VectorManifestStore(fusionStore, adapter.profile);
+  const dependencies = options.dependencies ?? {};
+  const snapshotReader = dependencies.readSnapshot ?? readCodeGraphSnapshot;
+  const changedFilePaths = options.changedFiles
+    ? new Set(options.changedFiles.map((filePath) => normalizeProjectFilePath(projectRoot, filePath)))
+    : undefined;
+  const snapshot = snapshotReader(projectRoot, changedFilePaths
+    ? { includeSourceSnippets: true, sourceSnippetFiles: [...changedFilePaths] }
+    : undefined);
+  const resolvedEmbedding = resolveVectorizeEmbedding(projectRoot, options);
+  cacheResolvedEmbedding(projectRoot, resolvedEmbedding);
+  const adapter = resolvedEmbedding.adapter;
+  const collection: CodeVectorCollection = openCollection(projectRoot, {
+    embeddingProfile: resolvedEmbedding.profile,
+    chunkerVersion: resolvedEmbedding.chunkerVersion,
+    queryAdapter: adapter
+  });
+  const fusionStoreExists = existsSync(fusionStorePath(projectRoot));
+  let fusionStore: FusionStore | undefined;
+  let manifest: VectorManifestStore | undefined;
+  const ensureManifest = (): VectorManifestStore => {
+    if (!fusionStore) {
+      fusionStore = new FusionStore(projectRoot);
+    }
+    if (!manifest) {
+      manifest = new VectorManifestStore(
+        fusionStore,
+        resolvedEmbedding.profile,
+        resolvedEmbedding.chunkerVersion
+      );
+    }
+    return manifest;
+  };
+  let documentsWritten = 0;
+  let refreshedFiles: NonNullable<VectorizeResult['refreshedFiles']> = [];
 
   try {
-    const vectorInputs: VectorDocumentInput[] = documents.map((document) => ({
-      id: document.id,
-      nodeId: document.nodeId,
-      filePath: document.filePath,
-      language: document.language,
-      kind: document.kind,
-      qualifiedName: document.qualifiedName,
+    const currentFiles = new Map(snapshot.files.map((file) => [file.path, file]));
+    const existingEntries = fusionStoreExists ? ensureManifest().entries() : [];
+    const existingEntryByFile = new Map<string, typeof existingEntries[number]>();
+    for (const entry of existingEntries) {
+      existingEntryByFile.set(entry.filePath, entry);
+    }
+    const finalEntries = new Map<string, typeof existingEntries[number]>();
+    for (const entry of existingEntries) {
+      finalEntries.set(entry.filePath, entry);
+    }
+
+    const candidateFiles = changedFilePaths
+      ? snapshot.files.filter((file) => changedFilePaths.has(file.path))
+      : snapshot.files;
+
+    const filesToRefresh = candidateFiles.filter((file) => {
+      const existing = existingEntryByFile.get(file.path);
+      return !existing || existing.contentHash !== file.contentHash || existing.state !== 'fresh' || existing.docIds.length === 0;
+    });
+    const filesToRemove = existingEntries
+      .map((entry) => entry.filePath)
+      .filter((filePath) => !currentFiles.has(filePath) && (!changedFilePaths || changedFilePaths.has(filePath)));
+    const filePathsToClear = [...new Set([...filesToRefresh.map((file) => file.path), ...filesToRemove])];
+
+    if (filePathsToClear.length > 0) {
+      ensureManifest();
+      const activeFusionStore = fusionStore!;
+      collection.deleteDocumentsByFilePaths(filePathsToClear);
+      activeFusionStore.deleteVectorDocumentsByFilePaths(
+        filePathsToClear,
+        resolvedEmbedding.profile,
+        resolvedEmbedding.chunkerVersion
+      );
+    }
+    if (filesToRemove.length > 0) {
+      const activeManifest = ensureManifest();
+      activeManifest.deleteFiles(filesToRemove);
+      for (const filePath of filesToRemove) {
+        finalEntries.delete(filePath);
+      }
+    }
+
+    if (filesToRefresh.length > 0) {
+      const activeManifest = ensureManifest();
+      const activeFusionStore = fusionStore!;
+      const changedFilePaths = new Set(filesToRefresh.map((file) => file.path));
+      const changedNodes = snapshot.nodes.filter((node) => changedFilePaths.has(node.filePath));
+      const documents = await createVectorDocuments(
+        snapshot,
+        adapter,
+        changedNodes,
+        resolvedEmbedding.chunkerVersion
+      );
+      documentsWritten = documents.length;
+      const vectorInputs: VectorDocumentInput[] = documents.map((document) => ({
+        id: document.id,
+        nodeId: document.nodeId,
+        filePath: document.filePath,
+        language: document.language,
+        kind: document.kind,
+        qualifiedName: document.qualifiedName,
         contentHash: document.contentHash,
         chunkerVersion: document.chunkerVersion,
         contentSparse: document.contentSparse,
         embedding: document.embedding
       }));
 
-    for (const file of snapshot.files) {
-      manifest.markPending(file.path, file.contentHash);
+      collection.insertDocuments(vectorInputs);
+
+      activeFusionStore.upsertVectorDocuments(
+        documents.map((document) => ({
+          id: scopedStoredVectorDocumentId(document.id, resolvedEmbedding.profile, document.chunkerVersion),
+          nodeId: document.nodeId,
+          filePath: document.filePath,
+          embeddingProfile: resolvedEmbedding.profile,
+          chunkerVersion: document.chunkerVersion,
+          json: document
+        }))
+      );
+
+      const docIdsByFile = new Map<string, string[]>();
+      for (const document of documents) {
+        const docIds = docIdsByFile.get(document.filePath) ?? [];
+        docIds.push(document.id);
+        docIdsByFile.set(document.filePath, docIds);
+      }
+
+      const freshEntries = activeManifest.markFreshFiles(filesToRefresh.map((file) => ({
+        ...file,
+        docIds: docIdsByFile.get(file.path) ?? []
+      })));
+      refreshedFiles = freshEntries.map((entry) => ({
+        path: entry.filePath,
+        contentHash: entry.contentHash,
+        docIds: [...entry.docIds]
+      }));
+      for (const entry of freshEntries) {
+        finalEntries.set(entry.filePath, entry);
+      }
     }
 
-    collection.insertDocuments(vectorInputs);
-    collection.flush();
-
-    fusionStore.upsertVectorDocuments(
-      documents.map((document) => ({
-        id: document.id,
-        nodeId: document.nodeId,
-        filePath: document.filePath,
-        embeddingProfile: adapter.profile,
-        chunkerVersion: document.chunkerVersion,
-        json: document
-      }))
-    );
-
-    const docIdsByFile = new Map<string, string[]>();
-    for (const document of documents) {
-      const docIds = docIdsByFile.get(document.filePath) ?? [];
-      docIds.push(document.id);
-      docIdsByFile.set(document.filePath, docIds);
-    }
-
-    for (const file of snapshot.files) {
-      manifest.markFresh(file.path, file.contentHash, docIdsByFile.get(file.path) ?? []);
-    }
-
-    const semanticStatus = new SemanticStatus(manifest.entries());
+    const finalEntriesList = [...finalEntries.values()];
+    const semanticStatus = new SemanticStatus(finalEntriesList);
+    const finalSummary = semanticStatus.summary();
+    const manifestWarnings = semanticStatus.getWarnings();
+    const totalDocuments = collection.count();
     return {
       projectPath: projectRoot,
       collectionPath: collection.path,
-      fusionDbPath: fusionStore.dbPath,
-      filesFresh: manifest.summary().fresh,
-      documentsWritten: documents.length,
-      manifestWarnings: semanticStatus.getWarnings()
+      fusionDbPath: fusionStore?.dbPath ?? fusionStorePath(projectRoot),
+      filesFresh: finalSummary.fresh,
+      documentsWritten,
+      totalDocuments,
+      refreshedFiles,
+      manifestWarnings
     };
   } catch (error) {
-    for (const file of snapshot.files) {
-      manifest.markFailed(file.path, file.contentHash, error instanceof Error ? error.message : String(error));
+    const message = error instanceof Error ? error.message : String(error);
+    const activeManifest = ensureManifest();
+    const failedFiles = changedFilePaths
+      ? [...changedFilePaths].map((filePath) => ({
+        path: filePath,
+        contentHash: currentSnapshotHash(snapshot, filePath) ?? existingManifestHash(activeManifest, filePath) ?? hashText(filePath)
+      }))
+      : snapshot.files;
+    for (const file of failedFiles) {
+      activeManifest.markFailed(file.path, file.contentHash, message);
     }
     throw error;
   } finally {
     collection.destroy();
-    fusionStore.close();
+    fusionStore?.close();
   }
+}
+
+export function resolveVectorizeEmbedding(
+  projectPath: string,
+  options: VectorizeProjectOptions = {}
+): ResolvedEmbeddingConfig {
+  const adapter = options.dependencies?.adapter;
+  if (adapter) {
+    const resolved = resolveActiveEmbedding(projectPath, {
+      ...options.embedding,
+      provider: adapter.provider,
+      embeddingProfile: options.embedding?.embeddingProfile ?? adapter.profile
+    });
+    return {
+      ...resolved,
+      profile: options.embedding?.embeddingProfile ?? adapter.profile,
+      adapter
+    };
+  }
+  return resolveActiveEmbedding(projectPath, options.embedding);
 }
 
 function hashText(text: string): string {
   return createHash('sha256').update(text).digest('hex');
 }
 
-function attachSourceSnippets(snapshot: CodeGraphSnapshot, projectRoot: string): CodeGraphSnapshot {
-  return {
-    ...snapshot,
-    nodes: snapshot.nodes.map((node) => {
-      const sourceSnippet = safeSourceSnippet(projectRoot, node.filePath, node.startLine, node.endLine);
-      return sourceSnippet ? { ...node, sourceSnippet } : node;
-    })
-  };
-}
-
-export function safeSourceSnippet(
-  projectPath: string,
-  filePath: string,
-  startLine: number | undefined,
-  endLine: number | undefined,
-  io: SourceSnippetIo = defaultSourceSnippetIo
-): string | undefined {
-  if (!Number.isInteger(startLine) || !Number.isInteger(endLine) || startLine! <= 0 || endLine! < startLine!) {
-    return undefined;
-  }
+function normalizeProjectFilePath(projectRoot: string, filePath: string): string {
   if (!filePath || isAbsolute(filePath)) {
-    return undefined;
+    throw new Error(`changedFiles entries must be project-relative: ${filePath}`);
   }
-  const projectRoot = resolve(projectPath);
-  const candidatePath = resolve(projectRoot, filePath);
-  if (!isPathInside(projectRoot, candidatePath)) {
-    return undefined;
+  const absolutePath = resolve(projectRoot, filePath);
+  if (!isPathInside(projectRoot, absolutePath)) {
+    throw new Error(`changedFiles entry escapes project root: ${filePath}`);
   }
-  try {
-    const realProjectRoot = io.realpath(projectRoot);
-    const realCandidate = io.realpath(candidatePath);
-    if (!isPathInside(realProjectRoot, realCandidate)) {
-      return undefined;
-    }
-    const stat = io.stat(realCandidate);
-    if (!stat.isFile()) {
-      return undefined;
-    }
-    const source = io.readFilePrefix(realCandidate, Math.min(stat.size, MAX_SOURCE_FILE_READ_BYTES));
-    const lines = source.split(/\r?\n/);
-    if (startLine! > lines.length) {
-      return undefined;
-    }
-    const lastLine = Math.min(endLine!, startLine! + MAX_SOURCE_SNIPPET_LINES - 1, lines.length);
-    const snippet = lines
-      .slice(startLine! - 1, lastLine)
-      .join('\n')
-      .slice(0, MAX_SOURCE_SNIPPET_CHARS)
-      .trimEnd();
-    return snippet.length > 0 ? snippet : undefined;
-  } catch {
-    return undefined;
-  }
+  return relative(projectRoot, absolutePath).replace(/\\/g, '/');
 }
 
-const defaultSourceSnippetIo: SourceSnippetIo = {
-  realpath: (path) => realpathSync.native(path),
-  stat: (path) => statSync(path),
-  readFilePrefix: readFilePrefix
-};
+function currentSnapshotHash(snapshot: CodeGraphSnapshot, filePath: string): string | undefined {
+  return snapshot.files.find((file) => file.path === filePath)?.contentHash;
+}
 
-function readFilePrefix(path: string, maxBytes: number): string {
-  const byteCount = Math.max(0, Math.min(maxBytes, MAX_SOURCE_FILE_READ_BYTES));
-  const buffer = Buffer.alloc(byteCount);
-  const fd = openSync(path, 'r');
-  try {
-    const bytesRead = readSync(fd, buffer, 0, byteCount, 0);
-    return buffer.subarray(0, bytesRead).toString('utf8');
-  } finally {
-    closeSync(fd);
-  }
+function existingManifestHash(manifest: VectorManifestStore, filePath: string): string | undefined {
+  return manifest.getByFile(filePath)?.contentHash;
 }
 
 function isPathInside(root: string, candidate: string): boolean {

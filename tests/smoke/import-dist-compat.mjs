@@ -2,9 +2,9 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const repoRoot = resolve(new URL('../..', import.meta.url).pathname);
+const repoRoot = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const requireFromRepo = createRequire(join(repoRoot, 'package.json'));
 const exportedEntries = [
   ['zincgraph/fusion/query-engine', 'dist/fusion/query-engine.js'],

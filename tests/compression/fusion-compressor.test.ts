@@ -36,6 +36,8 @@ describe('FusionCompressor', () => {
   });
 
   afterEach(async () => {
+    compressor.close();
+    ccrStore.close();
     await rm(tempDir, { recursive: true, force: true });
   });
 
@@ -167,13 +169,20 @@ describe('FusionCompressor', () => {
   test('createFromProject records compression feedback into the project store', async () => {
     const created = createProjectFusionCompressor(tempDir);
     const largeContent = `function tracked() {\n${'  process(data);\n'.repeat(120)}}`;
+    try {
+      const result = await created.compress([makeFusionNode({ content: largeContent, nodeId: 'feedback-node' })], { maxTokens: 20 });
+      expect(result.ccrHashes.size).toBeGreaterThan(0);
 
-    const result = await created.compress([makeFusionNode({ content: largeContent, nodeId: 'feedback-node' })], { maxTokens: 20 });
-    expect(result.ccrHashes.size).toBeGreaterThan(0);
-
-    const feedbackLoop = CompressionFeedbackLoop.createFromProject(tempDir);
-    const summary = feedbackLoop.summarize();
-    expect(summary.totalCompressions).toBeGreaterThan(0);
-    expect(summary.bySource.graph?.compressed).toBeGreaterThan(0);
+      const feedbackLoop = CompressionFeedbackLoop.createFromProject(tempDir);
+      try {
+        const summary = feedbackLoop.summarize();
+        expect(summary.totalCompressions).toBeGreaterThan(0);
+        expect(summary.bySource.graph?.compressed).toBeGreaterThan(0);
+      } finally {
+        feedbackLoop.close();
+      }
+    } finally {
+      created.close();
+    }
   });
 });

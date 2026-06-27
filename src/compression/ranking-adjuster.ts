@@ -27,10 +27,15 @@ export interface RankingAdjusterOptions {
 const DEFAULT_ROUTE_WEIGHT_DELTA = 0.1;
 const DEFAULT_KIND_BOOST = 0.2;
 
+/**
+ * Priority-ordering and reranking policy for mixed-source search results.
+ * Tunes graph, vector, and FTS weights using compression feedback.
+ */
 export class RankingAdjuster {
   readonly store: FeedbackStore;
   private readonly routeWeightDelta: number;
   private readonly kindBoost: number;
+  private closed = false;
 
   constructor(options: RankingAdjusterOptions) {
     this.store = options.store;
@@ -185,10 +190,25 @@ export class RankingAdjuster {
 
     return records;
   }
+
+  close(): void {
+    if (this.closed) {
+      return;
+    }
+    this.closed = true;
+    this.store.close();
+  }
 }
 
+/**
+ * Builds the dynamic fusion policy used to rerank search results from multiple sources.
+ */
 export function createFeedbackAwarePolicy(projectPath: string): DynamicFusionPolicy {
   const feedbackLoop = CompressionFeedbackLoop.createFromProject(projectPath);
-  const adjuster = new RankingAdjuster({ store: feedbackLoop.store });
-  return adjuster.buildPolicy(feedbackLoop.summarize());
+  try {
+    const adjuster = new RankingAdjuster({ store: feedbackLoop.store });
+    return adjuster.buildPolicy(feedbackLoop.summarize());
+  } finally {
+    feedbackLoop.close();
+  }
 }
