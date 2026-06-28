@@ -36,6 +36,9 @@ export function median(values) {
 }
 
 export function evaluateBenchmarkGoal(summary, options = {}) {
+  if (isPoolBenchmarkSummary(summary)) {
+    return evaluatePoolBenchmarkGoal(summary);
+  }
   const speedupTarget = options.speedupTarget ?? DEFAULT_SPEEDUP_TARGET;
   const thresholds = { ...DEFAULT_THRESHOLDS, ...(options.thresholds ?? {}) };
   const failures = [];
@@ -133,6 +136,65 @@ export function evaluateBenchmarkGoal(summary, options = {}) {
       fusionOutputBytes,
       freshnessScore: round2(freshnessScore),
       retrievalTaskIds: [...new Set(retrievalTasks.map((task) => task.id))]
+    }
+  };
+}
+
+function isPoolBenchmarkSummary(summary) {
+  return Array.isArray(summary?.repoResults) && Array.isArray(summary?.caseResults) && summary?.scoreModel?.version;
+}
+
+function evaluatePoolBenchmarkGoal(summary) {
+  const failures = [];
+  const warnings = [];
+  if (summary.accepted !== true) {
+    failures.push('Pool benchmark summary is not accepted.');
+  }
+  if (summary.hardGate?.passed !== true) {
+    failures.push('Pool hard gate did not pass.');
+  }
+  if (summary.scoreFloors?.passed !== true) {
+    failures.push('Pool score floors did not pass.');
+  }
+  if (summary.nonMutationProof?.passed !== true) {
+    failures.push('Pool non-mutation proof did not pass.');
+  }
+  if (summary.poolValidation?.ok !== true) {
+    failures.push('Pool validation did not pass.');
+  }
+  const repoCount = Number(summary.repoCount ?? 0);
+  const caseCount = Number(summary.caseCount ?? 0);
+  if (repoCount !== 6) {
+    failures.push(`Expected 6 repos in the pool summary, got ${repoCount}.`);
+  }
+  if (caseCount !== 52) {
+    failures.push(`Expected 52 cases in the pool summary, got ${caseCount}.`);
+  }
+  const coreRepoFloor = summary.scoreFloors?.coreRepoFloor === true;
+  const coreCaseFloor = summary.scoreFloors?.coreCaseFloor === true;
+  const baselineFloor = summary.scoreFloors?.baselineFloor === true;
+  if (!coreRepoFloor) {
+    failures.push('Core repo score floor was not met.');
+  }
+  if (!coreCaseFloor) {
+    failures.push('Core case score floor was not met.');
+  }
+  if (!baselineFloor) {
+    failures.push('Baseline floor was not met.');
+  }
+  return {
+    passed: failures.length === 0,
+    failures,
+    warnings,
+    metrics: {
+      repoCount,
+      caseCount,
+      globalQualityScore: round2(summary.globalQualityScore),
+      baselineFound: Boolean(summary.baseline?.found),
+      baselineGlobalQualityScore: Number(summary.baseline?.globalQualityScore ?? 0),
+      coreRepoFloor,
+      coreCaseFloor,
+      baselineFloor
     }
   };
 }

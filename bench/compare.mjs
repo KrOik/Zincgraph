@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { parsePoolBenchmarkArgs, runPoolBenchmark } from './pool-benchmark-runner.mjs';
 
 export const WEIGHTS = Object.freeze({
   retrieval: 30,
@@ -52,6 +53,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ZINCGRAPH_CLI = join(ROOT, 'dist/cli.js');
 const CODEGRAPH_BIN = join(ROOT, 'node_modules/@colbymchenry/codegraph/npm-shim.js');
 const CODEGRAPH_COMMAND = [process.execPath, CODEGRAPH_BIN];
+const BENCHMARK_POOL_PATH = join(ROOT, 'bench/benchmark-pool.json');
 
 export const TASKS = Object.freeze([
   {
@@ -469,12 +471,22 @@ export function createReport(summary) {
     .join('\n');
   const warnings = summary.preflight.warnings.length ? summary.preflight.warnings.map((warning) => `- ${warning}`).join('\n') : '- none';
   const proof = summary.nonMutationProof;
+  const benchmarkPool = summary.benchmarkPool ?? null;
   const proofLines = [
     `- scope: current repository state roots only (${(proof.watchedRoots ?? ['.codegraph', '.zincgraph']).join(', ')}); this is not a whole-repo or whole-filesystem immutability claim`,
     `- passed: ${proof.passed}`,
     `- changedPaths: ${proof.changedPaths.length ? proof.changedPaths.join(', ') : 'none'}`,
     `- sqliteVolatilePaths: ${proof.sqliteVolatilePaths.length ? proof.sqliteVolatilePaths.join(', ') : 'none'}`
   ].join('\n');
+  const benchmarkPoolLines = benchmarkPool
+    ? [
+        `- schemaVersion: ${benchmarkPool.schemaVersion}`,
+        `- scoreModelVersion: ${benchmarkPool.scoreModelVersion}`,
+        `- repoCount: ${benchmarkPool.repoCount}`,
+        `- tiers: core=${benchmarkPool.tierCounts.core}, extended=${benchmarkPool.tierCounts.extended}, stress=${benchmarkPool.tierCounts.stress}`,
+        `- caseCounts: core=${benchmarkPool.caseCounts.core}, extended=${benchmarkPool.caseCounts.extended}, stress=${benchmarkPool.caseCounts.stress}`
+      ].join('\n')
+    : '- not loaded';
   return `# CodeGraph vs Zincgraph Local Benchmark Report
 
 - generatedAt: ${summary.generatedAt}
@@ -525,6 +537,10 @@ ${normalizationRows || '| none | 0 | 0 | none | none |'}
 
 This is a **local deterministic benchmark**, not a universal headless-agent benchmark. It measures the installed CodeGraph and Zincgraph surfaces on a disposable copy of this repository, with exact scoring formulas from the PRD. CodeGraph remains the primary graph-speed baseline. Zincgraph can earn additional value through fusion, freshness, dedup/review, compression feedback, semantic routing, cross-module context, and wrapper capability. Per the user-corrected comparison, runtime/CLI latency and density/output size are diagnostic-only and excluded from the benchmark comparison score.
 
+## Benchmark Pool Contract
+
+${benchmarkPoolLines}
+
 ## Preflight warnings
 
 ${warnings}
@@ -549,6 +565,12 @@ function round2(value) {
 
 function round4(value) {
   return Number.isFinite(value) ? Math.round(value * 10000) / 10000 : 0;
+}
+
+function sumTierCases(repos, tier) {
+  return repos
+    .filter((repo) => repo.tier === tier)
+    .reduce((total, repo) => total + (repo.cases?.count ?? 0), 0);
 }
 
 function median(values) {
@@ -641,91 +663,35 @@ export function createRunSlots(runs) {
   return Array.from({ length: normalizeRunCount(runs) }, (_, index) => index);
 }
 
+export function loadBenchmarkPool(poolPath = BENCHMARK_POOL_PATH) {
+  const parsed = JSON.parse(readFileSync(poolPath, 'utf8'));
+  const repos = Array.isArray(parsed.repos) ? parsed.repos : [];
+  return {
+    path: poolPath,
+    schemaVersion: parsed.schemaVersion ?? null,
+    scoreModelVersion: parsed.scoreModel?.version ?? null,
+    repoCount: repos.length,
+    tierCounts: {
+      core: repos.filter((repo) => repo.tier === 'core').length,
+      extended: repos.filter((repo) => repo.tier === 'extended').length,
+      stress: repos.filter((repo) => repo.tier === 'stress').length
+    },
+    caseCounts: {
+      core: sumTierCases(repos, 'core'),
+      extended: sumTierCases(repos, 'extended'),
+      stress: sumTierCases(repos, 'stress')
+    },
+    raw: parsed
+  };
+}
+
 async function main() {
-  const options = parseArgs(process.argv.slice(2));
-  const sourceProjectPath = resolve(options.project);
-  const preflight = runPreflight(sourceProjectPath);
-  if (!preflight.ok) {
-    throw new Error(preflight.warnings.join('\n'));
-  }
-  const before = fingerprintRoots(sourceProjectPath);
-  const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
-  const resultDir = join(ROOT, 'bench/results', timestamp);
-  const latestDir = join(ROOT, 'bench/results/latest');
-  mkdirSync(resultDir, { recursive: true });
-  const benchmarkProjectPath = await prepareBenchmarkProject(sourceProjectPath, resultDir);
-  const tasks = [];
-  try {
-    for (const task of TASKS) {
-      if (task.isolated) {
-        tasks.push(await runIsolatedUpdateTask('codegraph', task, options.runs));
-        tasks.push(await runIsolatedUpdateTask('zincgraph-fusion', task, options.runs));
-        tasks.push(notApplicableTask(task, DELEGATED_ARM));
-        continue;
-      }
-      for (const arm of ['codegraph', 'zincgraph-fusion', DELEGATED_ARM]) {
-        const command = task.commands?.[arm];
-        if (!command) {
-          tasks.push(notApplicableTask(task, arm));
-          continue;
-        }
-        tasks.push(await runBenchmarkTask(task, arm, command, benchmarkProjectPath, options.runs));
-      }
-    }
-    const normalization = applyNormalizedScores(tasks);
-    const { arms, winner, diagnosticWinner } = summarizeArmScores(tasks, options.includeDelegatedInWinner);
-    const qualityOnly = summarizeQualityOnlyArms(arms);
-    const after = fingerprintRoots(sourceProjectPath);
-    const diff = diffFingerprints(before, after);
-    const diagnosticTranscripts = persistDiagnosticTranscripts(tasks, resultDir);
-    const summary = {
-      schemaVersion: 1,
-      generatedAt: new Date().toISOString(),
-      confidence: 'local-deterministic',
-      projectPath: sourceProjectPath,
-      benchmarkProjectPath,
-      runsPerCommand: options.runs,
-      weights: QUALITY_WEIGHTS,
-      diagnosticWeights: WEIGHTS,
-      preflight,
-      diagnosticTranscripts,
-      normalization,
-      taskCategories: summarizeTaskCategories(tasks),
-      arms,
-      qualityOnly,
-      tasks,
-      winner: {
-        byComparison: winner,
-        byTotal: winner,
-        diagnosticByLegacyTotal: diagnosticWinner,
-        notes: [
-          'Primary winner is the user-corrected benchmark comparison winner and excludes density/output plus runtime/CLI latency.',
-          'Diagnostic legacy totals still include density/runtime but do not determine the benchmark comparison winner.',
-          'Winner pool excludes zincgraph-delegated unless --include-delegated-in-winner is set.',
-          'Local deterministic score should not be interpreted as a universal headless-agent result.'
-        ]
-      },
-      nonMutationProof: {
-        watchedRoots: ['.codegraph', '.zincgraph'],
-        before,
-        after,
-        changedPaths: diff.changedPaths,
-        sqliteVolatilePaths: diff.sqliteVolatilePaths,
-        resultOnlyPaths: ['bench/results'],
-        passed: diff.changedPaths.length === 0
-      }
-    };
-    const report = createReport(summary);
-    writeFileSync(join(resultDir, 'summary.json'), JSON.stringify(summary, null, 2));
-    writeFileSync(join(resultDir, 'report.md'), report);
-    rmSync(latestDir, { recursive: true, force: true });
-    mkdirSync(dirname(latestDir), { recursive: true });
-    cpSync(resultDir, latestDir, { recursive: true });
-    console.log(report);
-  } finally {
-    if (!options.keepTemp) {
-      rmSync(benchmarkProjectPath, { recursive: true, force: true });
-    }
+  const options = parsePoolBenchmarkArgs(process.argv.slice(2));
+  const result = await runPoolBenchmark(options);
+  console.log(JSON.stringify(result.summary, null, 2));
+  console.log(`\n${result.report}`);
+  if (!result.summary.accepted) {
+    process.exitCode = 1;
   }
 }
 

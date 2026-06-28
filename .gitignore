@@ -6,6 +6,9 @@ bench/results/
 .codegraph/
 .zincgraph/
 .omx/
+bench/benchmark-pool.local.json
+bench/fixtures/.write-probe
+bench/*.zip
 .DS_Store
 *.log
 *.sqlite

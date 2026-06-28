@@ -255,6 +255,8 @@
     "test:watch": "vitest",
     "smoke:dist": "node tests/smoke/import-dist-compat.mjs",
     "benchmark:test": "npm run build --silent && node bench/compare.mjs --runs 1 && node bench/goal-gate.mjs",
+    "benchmark:pool-status": "node bench/pool-status.mjs",
+    "benchmark:pool-sync": "node bench/pool-sync.mjs",
     "benchmark:compare": "npm run build --silent && node bench/compare.mjs",
     "benchmark:goal": "npm run build --silent && node bench/compare.mjs --runs 3 && node bench/goal-gate.mjs"
   },

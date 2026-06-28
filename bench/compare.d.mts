@@ -31,6 +31,7 @@ export function diffFingerprints(before: Record<string, any>, after: Record<stri
 export function zeroScores(): DimensionScores;
 export function normalizeRunCount(value: unknown): number;
 export function createRunSlots(runs: unknown): number[];
+export function loadBenchmarkPool(poolPath?: string): Record<string, any>;
 export function aggregateRunRecords(records: Array<Record<string, any>>): Record<string, any>;
 export function persistDiagnosticTranscripts(tasks: Array<Record<string, any>>, resultDir: string): Record<string, any>;
 export function selectScoringRun(successfulRuns: Array<Record<string, any>>): Record<string, any> | null;

@@ -1,0 +1,341 @@
+{
+  "schemaVersion": 1,
+  "scoreModel": {
+    "version": "2026-06-27-v1",
+    "baseWeights": {
+      "retrieval": 30,
+      "relation": 20,
+      "multi_impl": 15,
+      "freshness": 20,
+      "impact": 15
+    }
+  },
+  "baselinePolicy": {
+    "acceptedField": "accepted",
+    "selection": "latest accepted summary artifact with matching schemaVersion, scoreModel.version, and enabled tier set ordered by generatedAt desc",
+    "firstRunBehavior": "skip baseline-dependent checks and report first-run"
+  },
+  "repoLayout": {
+    "coreRoot": "bench/corpora/core",
+    "extendedRoot": "bench/corpora/extended",
+    "stressRoot": "bench/worktrees",
+    "stressMetadataPath": "bench/benchmark-pool.local.json",
+    "baselineArtifactRoot": "bench/results",
+    "acceptedSummaryDiscovery": "bench/results/**/summary.json with accepted=true"
+  },
+  "repos": [
+    {
+      "id": "apache-superset",
+      "tier": "core",
+      "repoUrl": "https://github.com/apache/superset.git",
+      "path": "bench/corpora/core/apache-superset",
+      "acquisition": "submodule",
+      "pinPolicy": {
+        "kind": "submodule-gitlink",
+        "required": true,
+        "materializedField": "commitSha",
+        "sourceOfTruth": ".gitmodules url plus submodule gitlink SHA"
+      },
+      "cases": {
+        "count": 10,
+        "mix": {
+          "retrievalHeavy": 2,
+          "flow": 2,
+          "structure": 2,
+          "impact": 2,
+          "freshness": 2
+        }
+      }
+    },
+    {
+      "id": "deno",
+      "tier": "core",
+      "repoUrl": "https://github.com/denoland/deno.git",
+      "path": "bench/corpora/core/deno",
+      "acquisition": "submodule",
+      "pinPolicy": {
+        "kind": "submodule-gitlink",
+        "required": true,
+        "materializedField": "commitSha",
+        "sourceOfTruth": ".gitmodules url plus submodule gitlink SHA"
+      },
+      "cases": {
+        "count": 10,
+        "mix": {
+          "retrievalHeavy": 2,
+          "flow": 2,
+          "structure": 2,
+          "impact": 2,
+          "freshness": 2
+        }
+      }
+    },
+    {
+      "id": "apache-airflow",
+      "tier": "core",
+      "repoUrl": "https://github.com/apache/airflow.git",
+      "path": "bench/corpora/core/apache-airflow",
+      "acquisition": "submodule",
+      "pinPolicy": {
+        "kind": "submodule-gitlink",
+        "required": true,
+        "materializedField": "commitSha",
+        "sourceOfTruth": ".gitmodules url plus submodule gitlink SHA"
+      },
+      "cases": {
+        "count": 10,
+        "mix": {
+          "retrievalHeavy": 2,
+          "flow": 2,
+          "structure": 2,
+          "impact": 2,
+          "freshness": 2
+        }
+      }
+    },
+    {
+      "id": "grafana",
+      "tier": "extended",
+      "repoUrl": "https://github.com/grafana/grafana.git",
+      "path": "bench/corpora/extended/grafana",
+      "acquisition": "submodule",
+      "pinPolicy": {
+        "kind": "submodule-gitlink",
+        "required": true,
+        "materializedField": "commitSha",
+        "sourceOfTruth": ".gitmodules url plus submodule gitlink SHA"
+      },
+      "cases": {
+        "count": 8,
+        "mix": {
+          "retrievalHeavy": 2,
+          "flow": 2,
+          "structureOrMultiImplementation": 2,
+          "impact": 1,
+          "freshness": 1
+        }
+      }
+    },
+    {
+      "id": "openmetadata",
+      "tier": "extended",
+      "repoUrl": "https://github.com/open-metadata/openmetadata.git",
+      "path": "bench/corpora/extended/openmetadata",
+      "acquisition": "submodule",
+      "pinPolicy": {
+        "kind": "submodule-gitlink",
+        "required": true,
+        "materializedField": "commitSha",
+        "sourceOfTruth": ".gitmodules url plus submodule gitlink SHA"
+      },
+      "cases": {
+        "count": 8,
+        "mix": {
+          "retrievalHeavy": 2,
+          "flow": 2,
+          "structureOrMultiImplementation": 2,
+          "impact": 1,
+          "freshness": 1
+        }
+      }
+    },
+    {
+      "id": "airbyte",
+      "tier": "stress",
+      "repoUrl": "https://github.com/airbytehq/airbyte.git",
+      "path": "bench/worktrees/airbyte",
+      "acquisition": "gitignored-local-clone",
+      "pinPolicy": {
+        "kind": "local-clone-head",
+        "required": true,
+        "materializedField": "commitSha",
+        "sourceOfTruth": "bench/benchmark-pool.local.json plus exact local HEAD"
+      },
+      "cases": {
+        "count": 6,
+        "mix": {
+          "retrievalHeavy": 1,
+          "multiImplementationOrConnector": 2,
+          "configToRuntime": 1,
+          "freshness": 1,
+          "impact": 1
+        }
+      }
+    }
+  ],
+  "caseSchema": {
+    "requiredFields": [
+      "repoId",
+      "queryId",
+      "tier",
+      "family",
+      "query",
+      "difficulty",
+      "goldenFiles",
+      "goldenSymbols",
+      "goldenRelations",
+      "goldenImplementations",
+      "acceptableAlternates",
+      "invalidImplementations",
+      "requiredTopK",
+      "requiredEvidenceTerms",
+      "forbiddenFalsePositives",
+      "freshnessSetup",
+      "goldenTests",
+      "goldenRuntimeArtifacts",
+      "requiredConsequenceTerms",
+      "impactRequired"
+    ],
+    "typedShapes": {
+      "goldenFiles": "array of exact repo-relative file path strings",
+      "goldenSymbols": "array of exact symbol identifier strings",
+      "goldenRelations": "array of objects {kind:string, from:string, to:string}",
+      "goldenImplementations": "array of exact implementation identifier strings",
+      "acceptableAlternates": "array of exact implementation identifier strings",
+      "invalidImplementations": "array of exact implementation identifier strings",
+      "forbiddenFalsePositives": "array of exact symbol names, exact file path suffixes, or exact lowercase token strings",
+      "goldenTests": "array of exact repo-relative test file paths or exact test IDs",
+      "goldenRuntimeArtifacts": "array of exact repo-relative config/runtime artifact paths or identifiers",
+      "requiredConsequenceTerms": "array of exact lowercase consequence tokens",
+      "freshnessSetup": "object with newTargets:string[] and staleTargets:string[] using exact symbol names or exact repo-relative paths"
+    }
+  },
+  "matchingSemantics": {
+    "fileMatch": "exact repo-relative path equality unless a field explicitly says path suffix",
+    "symbolMatch": "exact identifier equality",
+    "relationMatch": "exact tuple equality on kind/from/to",
+    "implementationMatch": "exact identifier equality",
+    "runtimeArtifactMatch": "exact repo-relative path or exact declared identifier equality",
+    "consequenceTermMatch": "case-insensitive token equality against tokenized evidence output",
+    "testMatch": "exact repo-relative test path equality or exact test ID equality"
+  },
+  "evidenceOrdering": {
+    "sort": [
+      "explicitToolRankAsc",
+      "latencySourceRankAscMissingAsInfinity",
+      "shorterPathLengthAsc",
+      "lexicalPathAsc",
+      "originalEmissionIndexAsc"
+    ],
+    "topKRule": "first requiredTopK entries after stable sort"
+  },
+  "falsePositivePolicy": {
+    "entryKinds": [
+      "exactSymbolName",
+      "exactFilePathSuffix",
+      "exactLowercaseToken"
+    ],
+    "matching": {
+      "symbol": "exact name equality",
+      "path": "exact suffix",
+      "token": "case-insensitive token equality"
+    },
+    "penaltyPerDistinctEntryInTopK": 25,
+    "duplicatePenalty": "does not stack",
+    "precisionFloor": 0
+  },
+  "scoring": {
+    "applicability": {
+      "retrieval": "always",
+      "relation": "goldenRelations.length > 0",
+      "multi_impl": "family in {multi-implementation-disambiguation, connector-discovery, provider-discovery, plugin-discovery} or acceptableAlternates non-empty or goldenImplementations non-empty",
+      "freshness": "family == freshness-update",
+      "impact": "family in {affected-tests, config-to-runtime, scheduler-flow, ui-to-backend-flow, cli-entry-flow} or impactRequired == true"
+    },
+    "renormalization": "case_score = sum((weight_d / sum(weights_applicable)) * raw_score_d) over applicable dimensions",
+    "zeroDenominatorRules": {
+      "relationNoGoldenRelations": "N/A",
+      "requiredTopKNonPositive": 3,
+      "emptyGoldenSymbolsRetrieval": "70% file recall + 30% precision@K"
+    },
+    "retrieval": {
+      "withGoldenSymbols": "50% file recall + 30% symbol recall + 20% precision@K",
+      "withoutGoldenSymbols": "70% file recall + 30% precision@K"
+    },
+    "relation": "matched_golden_relations / total_golden_relations * 100",
+    "multiImpl": {
+      "validSet": "goldenImplementations union acceptableAlternates",
+      "invalidSet": "invalidImplementations",
+      "scores": {
+        "validOnly": 100,
+        "mixedValidAndInvalid": 50,
+        "invalidOnlyOrNoValid": 0
+      }
+    },
+    "freshness": {
+      "newTargetsField": "freshnessSetup.newTargets",
+      "staleTargetsField": "freshnessSetup.staleTargets",
+      "surfacingPass": "top-K contains at least one newly added file or symbol from newTargets after mutation",
+      "suppressionPass": "top-K contains no stale file/symbol/path from staleTargets after mutation",
+      "score": "50 * surfacingPass + 50 * suppressionPass"
+    },
+    "impact": {
+      "subweights": {
+        "affectedTests": 40,
+        "configRuntime": 30,
+        "consequence": 30
+      },
+      "affectedTests": "|predicted_tests intersect goldenTests| / |goldenTests| * 100 when goldenTests non-empty else N/A",
+      "configRuntime": "matched_golden_runtime_artifacts / total_golden_runtime_artifacts * 100 when goldenRuntimeArtifacts non-empty else N/A",
+      "consequence": "matched_required_consequence_terms / total_required_consequence_terms * 100 when requiredConsequenceTerms non-empty else N/A",
+      "renormalization": "same renormalization formula over applicable impact subparts"
+    }
+  },
+  "aggregation": {
+    "repoScore": "arithmetic mean of case scores",
+    "tierScore": "arithmetic mean of repo scores",
+    "globalQualityScore": "weighted sum of enabled tier scores with weights core 0.60, extended 0.30, stress 0.10 renormalized over enabled tiers"
+  },
+  "gates": {
+    "hardGates": [
+      "all 30 core cases execute successfully",
+      "every enabled repo pin/dirty check passes",
+      "freshness stale leakage is zero",
+      "non-mutation proof passes"
+    ],
+    "scoreFloors": [
+      "at least 27/30 core cases score >= 70",
+      "each core repo score >= 75.00",
+      "global quality score >= baseline quality - 1.00 when baseline exists"
+    ],
+    "diagnostics": [
+      "median core-pool latency regression <= 15%",
+      "output-byte regression <= 20% unless global quality score >= baseline + 5.00 and no core repo score drops > 2.00"
+    ]
+  },
+  "nonMutationProof": {
+    "trackedItemsPerSourceRepo": [
+      "HEAD SHA",
+      "git dirty status",
+      ".codegraph/",
+      ".zincgraph/",
+      "bench/benchmark-pool.json",
+      "bench/benchmark-pool.local.json if present"
+    ],
+    "comparison": "before/after recursive byte-content fingerprints and exact HEAD/dirty equality",
+    "exclusions": [
+      "disposable temp fixtures outside source repo paths"
+    ]
+  },
+  "stressMetadata": {
+    "requiredWhenStressEnabled": true,
+    "lifecycle": {
+      "gitignorePath": "bench/worktrees/.gitignore",
+      "localCloneRoot": "bench/worktrees/",
+      "metadataPath": "bench/benchmark-pool.local.json"
+    },
+    "fields": [
+      "repoUrl",
+      "commitSha",
+      "fetchedAt",
+      "dirty",
+      "enabled"
+    ],
+    "requiredValues": {
+      "dirty": false,
+      "enabled": true
+    },
+    "validation": "actual repo HEAD == commitSha and actual dirty == false exactly",
+    "failureMode": "hard-fail before scoring"
+  }
+}

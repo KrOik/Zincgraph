@@ -1,0 +1,19 @@
+{
+  "enabled": true,
+  "repoUrl": "https://github.com/airbytehq/airbyte.git",
+  "commitSha": "REPLACE_WITH_LOCAL_PIN",
+  "fetchedAt": "2026-06-27T00:00:00Z",
+  "dirty": false,
+  "archives": {
+    "apache-superset": {
+      "sourceType": "github-source-archive",
+      "repoUrl": "https://github.com/apache/superset.git",
+      "archivePath": "bench/superset-master.zip",
+      "archiveSha256": "REPLACE_WITH_ARCHIVE_SHA256",
+      "sourceCommitSha": "REPLACE_WITH_SOURCE_COMMIT_SHA",
+      "extractedPath": "bench/corpora/core/apache-superset",
+      "materializedAt": "2026-06-27T00:00:00Z",
+      "dirty": false
+    }
+  }
+}

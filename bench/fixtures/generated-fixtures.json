@@ -1,0 +1,2587 @@
+{
+  "apache-superset": [
+    {
+      "repoId": "apache-superset",
+      "queryId": "superset-rh-guest-token-revocation",
+      "tier": "core",
+      "family": "retrievalHeavy",
+      "query": "superset/security/guest_token.py superset/security/manager.py tests/unit_tests/security/guest_token_revocation_test.py tests/integration_tests/security/guest_token_security_tests.py build_guest_token_audit_payload get_current_guest_token_revocation_version bump_guest_token_revocation_version get_guest_user_from_token validate_guest_token_resources GuestUser SupersetSecurityManager",
+      "difficulty": "hard",
+      "goldenFiles": [
+        "superset/security/guest_token.py"
+      ],
+      "goldenSymbols": [],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "superset/security/guest_token.py",
+          "to": "GuestUser::__init__"
+        }
+      ],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 4,
+      "requiredEvidenceTerms": [
+        "guest",
+        "token",
+        "revocation",
+        "audit",
+        "security"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [],
+      "goldenRuntimeArtifacts": [
+        "superset/security/guest_token.py"
+      ],
+      "requiredConsequenceTerms": [],
+      "impactRequired": false
+    },
+    {
+      "repoId": "apache-superset",
+      "queryId": "superset-rh-sqlquery-render",
+      "tier": "core",
+      "family": "retrievalHeavy",
+      "query": "superset/sqllab/query_render.py superset/commands/sql_lab/execute.py superset/sql/parse.py SqlQueryRenderImpl SqlQueryRenderException ExecuteSqlCommand SqlQueryRender render validate",
+      "difficulty": "hard",
+      "goldenFiles": [
+        "superset/sqllab/query_render.py",
+        "superset/commands/sql_lab/execute.py"
+      ],
+      "goldenSymbols": [
+        "ExecuteSqlCommand"
+      ],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "superset/commands/sql_lab/execute.py",
+          "to": "ExecuteSqlCommand"
+        }
+      ],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 3,
+      "requiredEvidenceTerms": [
+        "sql",
+        "template",
+        "undefined",
+        "parameter",
+        "render"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [],
+      "goldenRuntimeArtifacts": [
+        "superset/sqllab/query_render.py",
+        "superset/commands/sql_lab/execute.py"
+      ],
+      "requiredConsequenceTerms": [],
+      "impactRequired": false
+    },
+    {
+      "repoId": "apache-superset",
+      "queryId": "superset-flow-mcp-stdio",
+      "tier": "core",
+      "family": "flow",
+      "query": "superset/mcp_service/__main__.py superset/mcp_service/app.py superset/mcp_service/server.py superset/mcp_service/middleware.py main _add_default_middlewares build_middleware_list init_fastmcp_server run_server create_response_size_guard_middleware create_mcp_app",
+      "difficulty": "medium",
+      "goldenFiles": [
+        "superset/mcp_service/__main__.py",
+        "superset/mcp_service/app.py",
+        "superset/mcp_service/server.py"
+      ],
+      "goldenSymbols": [
+        "main",
+        "_add_default_middlewares",
+        "init_fastmcp_server",
+        "run_server"
+      ],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "superset/mcp_service/__main__.py",
+          "to": "main"
+        },
+        {
+          "kind": "contains",
+          "from": "superset/mcp_service/server.py",
+          "to": "run_server"
+        }
+      ],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 4,
+      "requiredEvidenceTerms": [
+        "stdio",
+        "middleware",
+        "fastmcp",
+        "transport",
+        "server"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [
+        "tests/unit_tests/test_mcp_stdio_entrypoint.py"
+      ],
+      "goldenRuntimeArtifacts": [
+        "superset/mcp_service/__main__.py",
+        "superset/mcp_service/app.py",
+        "superset/mcp_service/server.py"
+      ],
+      "requiredConsequenceTerms": [],
+      "impactRequired": false
+    },
+    {
+      "repoId": "apache-superset",
+      "queryId": "superset-flow-thumbnail-cache",
+      "tier": "core",
+      "family": "flow",
+      "query": "superset/models/dashboard.py superset/models/slice.py superset/tasks/thumbnails.py superset/thumbnails/digest.py superset/utils/screenshots.py cache_chart_thumbnail cache_dashboard_thumbnail cache_dashboard_screenshot get_dashboard_digest get_chart_digest DashboardScreenshot ChartScreenshot",
+      "difficulty": "medium",
+      "goldenFiles": [
+        "superset/tasks/thumbnails.py",
+        "superset/utils/screenshots.py"
+      ],
+      "goldenSymbols": [
+        "cache_chart_thumbnail",
+        "cache_dashboard_screenshot"
+      ],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "superset/tasks/thumbnails.py",
+          "to": "cache_chart_thumbnail"
+        },
+        {
+          "kind": "contains",
+          "from": "superset/tasks/thumbnails.py",
+          "to": "cache_dashboard_screenshot"
+        }
+      ],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 3,
+      "requiredEvidenceTerms": [
+        "thumbnail",
+        "cache",
+        "screenshot",
+        "dashboard",
+        "chart"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [
+        "tests/unit_tests/tasks/test_utils.py"
+      ],
+      "goldenRuntimeArtifacts": [
+        "superset/tasks/thumbnails.py",
+        "superset/utils/screenshots.py"
+      ],
+      "requiredConsequenceTerms": [
+        "thumbnail",
+        "cache",
+        "screenshot",
+        "dashboard",
+        "chart",
+        "playwright"
+      ],
+      "impactRequired": false
+    },
+    {
+      "repoId": "apache-superset",
+      "queryId": "superset-struct-dashboard-graph",
+      "tier": "core",
+      "family": "structure",
+      "query": "superset/models/dashboard.py superset/models/slice.py superset/models/helpers.py superset/utils/dashboard_import_export.py Dashboard copy_dashboard export_dashboards get_url datasources status",
+      "difficulty": "medium",
+      "goldenFiles": [
+        "superset/models/dashboard.py"
+      ],
+      "goldenSymbols": [
+        "Dashboard",
+        "export_dashboards"
+      ],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "superset/models/dashboard.py",
+          "to": "Dashboard"
+        }
+      ],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 2,
+      "requiredEvidenceTerms": [
+        "dashboard",
+        "export",
+        "slice",
+        "owner",
+        "relationship"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [],
+      "goldenRuntimeArtifacts": [
+        "superset/charts/api.py",
+        "superset/cli/importexport.py"
+      ],
+      "requiredConsequenceTerms": [],
+      "impactRequired": false
+    },
+    {
+      "repoId": "apache-superset",
+      "queryId": "superset-struct-slice-graph",
+      "tier": "core",
+      "family": "structure",
+      "query": "superset/models/slice.py superset/models/core.py superset/connectors/sqla/models.py superset/viz.py Slice clone datasource_name_text viz set_related_perm event_after_chart_changed",
+      "difficulty": "medium",
+      "goldenFiles": [
+        "superset/models/slice.py"
+      ],
+      "goldenSymbols": [
+        "Slice",
+        "clone",
+        "datasource_name_text"
+      ],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "superset/models/slice.py",
+          "to": "Slice"
+        }
+      ],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 2,
+      "requiredEvidenceTerms": [
+        "slice",
+        "datasource",
+        "viz",
+        "chart",
+        "table"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [],
+      "goldenRuntimeArtifacts": [
+        "superset/models/slice.py",
+        "superset/security/manager.py"
+      ],
+      "requiredConsequenceTerms": [],
+      "impactRequired": false
+    },
+    {
+      "repoId": "apache-superset",
+      "queryId": "superset-impact-sqllab-persist-off",
+      "tier": "core",
+      "family": "impact",
+      "query": "superset/views/sqllab.py superset/sqllab/sql_json_executer.py superset/sqllab/query_render.py superset/commands/sql_lab/execute.py tests/integration_tests/sqllab_tests.py tests/integration_tests/superset_test_config_sqllab_backend_persist_off.py tests/integration_tests/superset_test_config.py SqllabView ExecuteSqlCommand SynchronousSqlJsonExecutor ASynchronousSqlJsonExecutor SqlJsonExecutor SqlQueryRender",
+      "difficulty": "hard",
+      "goldenFiles": [
+        "superset/sqllab/sql_json_executer.py"
+      ],
+      "goldenSymbols": [
+        "SynchronousSqlJsonExecutor"
+      ],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "superset/sqllab/sql_json_executer.py",
+          "to": "SynchronousSqlJsonExecutor"
+        }
+      ],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 2,
+      "requiredEvidenceTerms": [
+        "sqllab",
+        "persist",
+        "backend",
+        "results",
+        "query"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [
+        "tests/integration_tests/sql_lab/api_tests.py",
+        "tests/integration_tests/sql_lab/commands_tests.py"
+      ],
+      "goldenRuntimeArtifacts": [
+        "superset/sqllab/api.py",
+        "superset/sqllab/sql_json_executer.py"
+      ],
+      "requiredConsequenceTerms": [
+        "backend",
+        "results",
+        "query",
+        "limit"
+      ],
+      "impactRequired": true
+    },
+    {
+      "repoId": "apache-superset",
+      "queryId": "superset-impact-thumbnails-config",
+      "tier": "core",
+      "family": "impact",
+      "query": "superset/tasks/thumbnails.py superset/models/dashboard.py superset/models/slice.py superset/thumbnails/digest.py superset/utils/screenshots.py tests/integration_tests/thumbnails_tests.py tests/integration_tests/superset_test_config_thumbnails.py superset/config.py cache_chart_thumbnail cache_dashboard_thumbnail cache_dashboard_screenshot DashboardScreenshot ChartScreenshot get_dashboard_digest get_chart_digest",
+      "difficulty": "hard",
+      "goldenFiles": [
+        "superset/tasks/thumbnails.py"
+      ],
+      "goldenSymbols": [
+        "cache_chart_thumbnail"
+      ],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "superset/tasks/thumbnails.py",
+          "to": "cache_chart_thumbnail"
+        }
+      ],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 2,
+      "requiredEvidenceTerms": [
+        "thumbnail",
+        "cache",
+        "screenshot",
+        "dashboard",
+        "chart"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [
+        "tests/integration_tests/thumbnails_tests.py"
+      ],
+      "goldenRuntimeArtifacts": [
+        "superset/tasks/thumbnails.py"
+      ],
+      "requiredConsequenceTerms": [
+        "thumbnail",
+        "cache",
+        "screenshot",
+        "dashboard",
+        "chart"
+      ],
+      "impactRequired": false
+    },
+    {
+      "repoId": "apache-superset",
+      "queryId": "superset-fresh-mcp-surface",
+      "tier": "core",
+      "family": "freshness",
+      "query": "superset/mcp_service/__main__.py superset/mcp_service/app.py superset/mcp_service/server.py superset/mcp_service/middleware.py tests/unit_tests/test_mcp_stdio_entrypoint.py tests/unit_tests/mcp_service/test_mcp_server.py tests/unit_tests/mcp_service/test_mcp_tool_registration.py get_default_instructions create_mcp_app init_fastmcp_server build_middleware_list run_server",
+      "difficulty": "hard",
+      "goldenFiles": [
+        "tests/unit_tests/mcp_service/test_mcp_tool_registration.py"
+      ],
+      "goldenSymbols": [],
+      "goldenRelations": [],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 1,
+      "requiredEvidenceTerms": [
+        "mcp",
+        "instructions",
+        "middleware",
+        "server",
+        "stdio"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [
+          "tests/unit_tests/mcp_service/test_mcp_tool_registration.py"
+        ],
+        "staleTargets": []
+      },
+      "goldenTests": [
+        "tests/unit_tests/mcp_service/test_mcp_tool_registration.py"
+      ],
+      "goldenRuntimeArtifacts": [],
+      "requiredConsequenceTerms": [],
+      "impactRequired": false
+    },
+    {
+      "repoId": "apache-superset",
+      "queryId": "superset-fresh-guest-token-revocation",
+      "tier": "core",
+      "family": "freshness",
+      "query": "superset/security/guest_token.py superset/security/manager.py superset/security/session_invalidation.py superset/views/auth.py tests/integration_tests/security/guest_token_security_tests.py tests/integration_tests/security_tests.py build_guest_token_audit_payload get_current_guest_token_revocation_version bump_guest_token_revocation_version revoke_guest_token_access get_guest_user_from_token",
+      "difficulty": "hard",
+      "goldenFiles": [
+        "superset/security/guest_token.py",
+        "superset/security/manager.py",
+        "tests/integration_tests/security/guest_token_security_tests.py"
+      ],
+      "goldenSymbols": [
+        "get_current_guest_token_revocation_version"
+      ],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "superset/security/guest_token.py",
+          "to": "get_current_guest_token_revocation_version"
+        }
+      ],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 4,
+      "requiredEvidenceTerms": [
+        "guest",
+        "token",
+        "revocation",
+        "session",
+        "auth"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [
+          "superset/security/manager.py"
+        ],
+        "staleTargets": []
+      },
+      "goldenTests": [
+        "tests/integration_tests/security/guest_token_security_tests.py"
+      ],
+      "goldenRuntimeArtifacts": [
+        "superset/security/manager.py",
+        "superset/security/guest_token.py"
+      ],
+      "requiredConsequenceTerms": [],
+      "impactRequired": false
+    }
+  ],
+  "deno": [
+    {
+      "repoId": "deno",
+      "queryId": "deno-rh-file-fetcher",
+      "tier": "core",
+      "family": "retrievalHeavy",
+      "query": "cli/file_fetcher.rs create_cli_file_fetcher BlobStoreAdapter PermissionedFileFetcherOptions",
+      "difficulty": "medium",
+      "goldenFiles": [
+        "cli/file_fetcher.rs",
+        "libs/resolver/file_fetcher.rs"
+      ],
+      "goldenSymbols": [
+        "create_cli_file_fetcher"
+      ],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "cli/file_fetcher.rs",
+          "to": "create_cli_file_fetcher"
+        }
+      ],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 3,
+      "requiredEvidenceTerms": [
+        "permissioned",
+        "fetcher",
+        "blobstore",
+        "httpclient",
+        "download"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [],
+      "goldenRuntimeArtifacts": [
+        "cli/file_fetcher.rs",
+        "libs/resolver/file_fetcher.rs"
+      ],
+      "requiredConsequenceTerms": [],
+      "impactRequired": false
+    },
+    {
+      "repoId": "deno",
+      "queryId": "deno-rh-import-attrs",
+      "tier": "core",
+      "family": "retrievalHeavy",
+      "query": "runtime/worker.rs create_validate_import_attributes_callback create_custom_module_evaluation_callback create_permissions_stack_trace_callback",
+      "difficulty": "medium",
+      "goldenFiles": [
+        "runtime/worker.rs"
+      ],
+      "goldenSymbols": [
+        "create_permissions_stack_trace_callback"
+      ],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "runtime/worker.rs",
+          "to": "create_permissions_stack_trace_callback"
+        }
+      ],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 2,
+      "requiredEvidenceTerms": [
+        "import",
+        "attributes",
+        "raw",
+        "module",
+        "css"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [],
+      "goldenRuntimeArtifacts": [
+        "runtime/worker.rs"
+      ],
+      "requiredConsequenceTerms": [],
+      "impactRequired": false
+    },
+    {
+      "repoId": "deno",
+      "queryId": "deno-flow-startup",
+      "tier": "core",
+      "family": "flow",
+      "query": "cli/main.rs cli/lib.rs resolve_flags_and_init run_subcommand wait_for_start init_v8 flags_from_vec_with_initial_cwd",
+      "difficulty": "hard",
+      "goldenFiles": [
+        "cli/lib.rs"
+      ],
+      "goldenSymbols": [
+        "resolve_flags_and_init"
+      ],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "cli/lib.rs",
+          "to": "resolve_flags_and_init"
+        }
+      ],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 2,
+      "requiredEvidenceTerms": [
+        "startup",
+        "clap",
+        "subcommand",
+        "v8",
+        "control"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [
+        "cli/lsp/testing/execution.rs"
+      ],
+      "goldenRuntimeArtifacts": [
+        "cli/lib.rs",
+        "libs/dcore/src/main.rs"
+      ],
+      "requiredConsequenceTerms": [],
+      "impactRequired": false
+    },
+    {
+      "repoId": "deno",
+      "queryId": "deno-flow-runtime-wiring",
+      "tier": "core",
+      "family": "flow",
+      "query": "runtime/worker.rs create_validate_import_attributes_callback create_custom_module_evaluation_callback create_permissions_stack_trace_callback MainWorker WorkerServiceOptions common_runtime",
+      "difficulty": "hard",
+      "goldenFiles": [
+        "runtime/worker.rs"
+      ],
+      "goldenSymbols": [
+        "MainWorker::bootstrap_from_options"
+      ],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "runtime/worker.rs",
+          "to": "MainWorker::bootstrap_from_options"
+        }
+      ],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 2,
+      "requiredEvidenceTerms": [
+        "module",
+        "attributes",
+        "stack",
+        "trace",
+        "jsruntime"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [],
+      "goldenRuntimeArtifacts": [
+        "runtime/worker.rs"
+      ],
+      "requiredConsequenceTerms": [],
+      "impactRequired": false
+    },
+    {
+      "repoId": "deno",
+      "queryId": "deno-structure-cachedb",
+      "tier": "core",
+      "family": "structure",
+      "query": "cli/cache/cache_db.rs CacheDBConfiguration CacheDB CacheFailure ConnectionState create_combined_sql open_connection initialize_connection handle_failure_mode log_failure_mode is_wsl1",
+      "difficulty": "hard",
+      "goldenFiles": [
+        "cli/cache/cache_db.rs"
+      ],
+      "goldenSymbols": [
+        "open_connection"
+      ],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "cli/cache/cache_db.rs",
+          "to": "open_connection"
+        }
+      ],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 2,
+      "requiredEvidenceTerms": [
+        "wal",
+        "truncate",
+        "blackhole",
+        "in-memory",
+        "wsl"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [],
+      "goldenRuntimeArtifacts": [
+        "cli/cache/cache_db.rs"
+      ],
+      "requiredConsequenceTerms": [],
+      "impactRequired": false
+    },
+    {
+      "repoId": "deno",
+      "queryId": "deno-structure-lsp-state",
+      "tier": "core",
+      "family": "structure",
+      "query": "cli/lsp/language_server.rs LanguageServerTaskQueue DidChangeBatchQueue StateSnapshot to_lsp_range did_save did_change_watched_files did_change_configuration did_close notebook_did_change",
+      "difficulty": "hard",
+      "goldenFiles": [
+        "cli/lsp/language_server.rs"
+      ],
+      "goldenSymbols": [
+        "Inner::did_change_watched_files"
+      ],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "cli/lsp/language_server.rs",
+          "to": "Inner::did_change_watched_files"
+        }
+      ],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 1,
+      "requiredEvidenceTerms": [
+        "snapshot",
+        "workspace",
+        "queue",
+        "diagnostic",
+        "lsp"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [
+        "tests/integration/lsp_tests.rs"
+      ],
+      "goldenRuntimeArtifacts": [
+        "cli/lsp/language_server.rs"
+      ],
+      "requiredConsequenceTerms": [],
+      "impactRequired": false
+    },
+    {
+      "repoId": "deno",
+      "queryId": "deno-impact-task-runner",
+      "tier": "core",
+      "family": "impact",
+      "query": "cli/tools/task.rs TaskRunner::run_npm_script run_single_package_scripts maybe_npm_install resolve_task_node_modules_bin_dirs resolve_custom_commands",
+      "difficulty": "hard",
+      "goldenFiles": [
+        "cli/tools/task.rs"
+      ],
+      "goldenSymbols": [
+        "TaskRunner::run_npm_script"
+      ],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "cli/tools/task.rs",
+          "to": "TaskRunner::run_npm_script"
+        }
+      ],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 1,
+      "requiredEvidenceTerms": [
+        "task",
+        "path",
+        "env",
+        "node_modules",
+        "shell"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [
+        "tests/integration/install_tests.rs"
+      ],
+      "goldenRuntimeArtifacts": [
+        "cli/tools/task.rs",
+        "cli/npm.rs"
+      ],
+      "requiredConsequenceTerms": [
+        "task",
+        "run",
+        "path",
+        "env",
+        "script"
+      ],
+      "impactRequired": false
+    },
+    {
+      "repoId": "deno",
+      "queryId": "deno-impact-lsp",
+      "tier": "core",
+      "family": "impact",
+      "query": "cli/lsp/language_server.rs cli/lsp/testing/server.rs LanguageServer DidChangeBatchQueue StateSnapshot TestServer as_delete_notification run_cancel_request tests/integration/lsp_tests.rs tests/bench/testdata/code_lens.ts",
+      "difficulty": "hard",
+      "goldenFiles": [
+        "tests/integration/lsp_tests.rs"
+      ],
+      "goldenSymbols": [
+        "lsp_testing_api"
+      ],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "tests/integration/lsp_tests.rs",
+          "to": "lsp_testing_api"
+        }
+      ],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 1,
+      "requiredEvidenceTerms": [
+        "lsp",
+        "diagnostic",
+        "hover",
+        "snapshot",
+        "code"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [
+        "tests/integration/lsp_tests.rs"
+      ],
+      "goldenRuntimeArtifacts": [],
+      "requiredConsequenceTerms": [
+        "lsp",
+        "snapshot"
+      ],
+      "impactRequired": false
+    },
+    {
+      "repoId": "deno",
+      "queryId": "deno-fresh-import-map",
+      "tier": "core",
+      "family": "freshness",
+      "query": "tools/update_import_map_for_tests.ts sortObjectByKey rootImportMap coreImportMap denoConfig import_map.json tools/core_import_map.json",
+      "difficulty": "medium",
+      "goldenFiles": [
+        "tools/update_import_map_for_tests.ts"
+      ],
+      "goldenSymbols": [
+        "sortObjectByKey"
+      ],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "tools/update_import_map_for_tests.ts",
+          "to": "sortObjectByKey"
+        }
+      ],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 2,
+      "requiredEvidenceTerms": [
+        "import",
+        "map",
+        "std",
+        "workspace",
+        "write"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [
+          "tools/lint.js"
+        ],
+        "staleTargets": []
+      },
+      "goldenTests": [],
+      "goldenRuntimeArtifacts": [
+        "tools/lint.js",
+        "cli/tools/task.rs"
+      ],
+      "requiredConsequenceTerms": [
+        "generated",
+        "import",
+        "map"
+      ],
+      "impactRequired": false
+    },
+    {
+      "repoId": "deno",
+      "queryId": "deno-fresh-node-types",
+      "tier": "core",
+      "family": "freshness",
+      "query": "tools/update_types_node.ts downloadAndExtractPackages modifySourceFiles extractTarball getWebGlobalNames cli/tsc/dts/node/README.md cli/tsc/dts/node/index.d.cts cli/tsc/dts/node/undici/index.d.ts",
+      "difficulty": "medium",
+      "goldenFiles": [
+        "tools/update_types_node.ts"
+      ],
+      "goldenSymbols": [
+        "downloadAndExtractPackages",
+        "modifySourceFiles",
+        "extractTarball",
+        "getWebGlobalNames"
+      ],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "tools/update_types_node.ts",
+          "to": "downloadAndExtractPackages"
+        },
+        {
+          "kind": "contains",
+          "from": "tools/update_types_node.ts",
+          "to": "modifySourceFiles"
+        },
+        {
+          "kind": "contains",
+          "from": "tools/update_types_node.ts",
+          "to": "extractTarball"
+        },
+        {
+          "kind": "contains",
+          "from": "tools/update_types_node.ts",
+          "to": "getWebGlobalNames"
+        }
+      ],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 2,
+      "requiredEvidenceTerms": [
+        "download",
+        "extract",
+        "types",
+        "undici",
+        "declaration"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [
+          "tools/update_types_node.ts"
+        ],
+        "staleTargets": []
+      },
+      "goldenTests": [],
+      "goldenRuntimeArtifacts": [
+        "tools/update_types_node.ts",
+        "cli/tsc/dts/node/buffer.buffer.d.cts"
+      ],
+      "requiredConsequenceTerms": [
+        "generated",
+        "node",
+        "types",
+        "undici"
+      ],
+      "impactRequired": false
+    }
+  ],
+  "apache-airflow": [
+    {
+      "repoId": "apache-airflow",
+      "queryId": "af-core-rh-conn-bulk",
+      "tier": "core",
+      "family": "retrievalHeavy",
+      "query": "airflow-core/src/airflow/api_fastapi/core_api/routes/public/connections.py airflow-core/src/airflow/api_fastapi/core_api/services/public/connections.py airflow-core/src/airflow/api_fastapi/core_api/datamodels/connections.py get_connection get_connections post_connection bulk_connections handle_bulk_update update_orm_from_pydantic ConnectionResponse ConnectionCollectionResponse",
+      "difficulty": "hard",
+      "goldenFiles": [
+        "airflow-core/src/airflow/api_fastapi/core_api/routes/public/connections.py",
+        "airflow-core/src/airflow/api_fastapi/core_api/services/public/connections.py"
+      ],
+      "goldenSymbols": [
+        "bulk_connections",
+        "handle_bulk_update"
+      ],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "airflow-core/src/airflow/api_fastapi/core_api/routes/public/connections.py",
+          "to": "bulk_connections"
+        }
+      ],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 3,
+      "requiredEvidenceTerms": [
+        "bulk_update",
+        "password",
+        "extra",
+        "merge",
+        "team_name"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [],
+      "goldenRuntimeArtifacts": [
+        "airflow-core/src/airflow/api_fastapi/core_api/routes/public/connections.py",
+        "airflow-core/src/airflow/api_fastapi/core_api/services/public/connections.py"
+      ],
+      "requiredConsequenceTerms": [],
+      "impactRequired": false
+    },
+    {
+      "repoId": "apache-airflow",
+      "queryId": "af-core-rh-dagrun-clear",
+      "tier": "core",
+      "family": "retrievalHeavy",
+      "query": "airflow-core/src/airflow/api_fastapi/core_api/routes/public/dag_run.py airflow-core/src/airflow/api_fastapi/core_api/services/public/dag_run.py airflow-core/src/airflow/api_fastapi/core_api/datamodels/dag_run.py airflow-core/src/airflow/api_fastapi/common/dagbag.py get_dag_run delete_dag_run patch_dag_run patch_dag_run_state patch_dag_run_note perform_clear_dag_run resolve_run_on_latest_version DAGRunResponse",
+      "difficulty": "hard",
+      "goldenFiles": [
+        "airflow-core/src/airflow/api_fastapi/core_api/routes/public/dag_run.py",
+        "airflow-core/src/airflow/api_fastapi/core_api/services/public/dag_run.py"
+      ],
+      "goldenSymbols": [
+        "perform_clear_dag_run"
+      ],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "airflow-core/src/airflow/api_fastapi/core_api/services/public/dag_run.py",
+          "to": "perform_clear_dag_run"
+        }
+      ],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 3,
+      "requiredEvidenceTerms": [
+        "run_on_latest_version",
+        "only_new",
+        "only_failed",
+        "patch_dag_run_state",
+        "note"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [],
+      "goldenRuntimeArtifacts": [
+        "airflow-core/src/airflow/api_fastapi/core_api/routes/public/dag_run.py",
+        "airflow-core/src/airflow/api_fastapi/core_api/services/public/dag_run.py"
+      ],
+      "requiredConsequenceTerms": [],
+      "impactRequired": false
+    },
+    {
+      "repoId": "apache-airflow",
+      "queryId": "af-core-flow-dags-list",
+      "tier": "core",
+      "family": "flow",
+      "query": "airflow-core/src/airflow/api_fastapi/core_api/routes/public/dags.py airflow-core/src/airflow/api_fastapi/common/db/dags.py airflow-core/src/airflow/api_fastapi/common/db/common.py airflow-core/src/airflow/api_fastapi/core_api/datamodels/dags.py get_dags generate_dag_with_latest_run_query paginated_select apply_filters_to_select DAGCollectionResponse",
+      "difficulty": "medium",
+      "goldenFiles": [
+        "airflow-core/src/airflow/api_fastapi/core_api/routes/public/dags.py"
+      ],
+      "goldenSymbols": [
+        "get_dags"
+      ],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "airflow-core/src/airflow/api_fastapi/core_api/routes/public/dags.py",
+          "to": "get_dags"
+        }
+      ],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 2,
+      "requiredEvidenceTerms": [
+        "latest_run",
+        "readable_dags_filter",
+        "order_by",
+        "paginate",
+        "total_entries"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [],
+      "goldenRuntimeArtifacts": [
+        "airflow-core/src/airflow/api_fastapi/core_api/routes/public/dags.py"
+      ],
+      "requiredConsequenceTerms": [],
+      "impactRequired": false
+    },
+    {
+      "repoId": "apache-airflow",
+      "queryId": "af-core-flow-structure",
+      "tier": "core",
+      "family": "flow",
+      "query": "airflow-core/src/airflow/api_fastapi/core_api/routes/ui/structure.py airflow-core/src/airflow/api_fastapi/core_api/services/ui/structure.py airflow-core/src/airflow/api_fastapi/core_api/services/ui/task_group.py airflow-core/src/airflow/utils/dag_edges.py airflow-core/src/airflow/api_fastapi/core_api/datamodels/ui/structure.py structure_data get_upstream_assets bind_output_assets_to_tasks task_group_to_dict dag_edges StructureDataResponse",
+      "difficulty": "medium",
+      "goldenFiles": [
+        "airflow-core/src/airflow/api_fastapi/core_api/routes/ui/structure.py",
+        "airflow-core/src/airflow/api_fastapi/core_api/services/ui/structure.py"
+      ],
+      "goldenSymbols": [
+        "get_upstream_assets"
+      ],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "airflow-core/src/airflow/api_fastapi/core_api/services/ui/structure.py",
+          "to": "get_upstream_assets"
+        }
+      ],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 3,
+      "requiredEvidenceTerms": [
+        "structure_data",
+        "asset_condition",
+        "resolved_from_alias",
+        "topological_sort",
+        "dag_edges"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [],
+      "goldenRuntimeArtifacts": [
+        "airflow-core/src/airflow/api_fastapi/core_api/routes/ui/structure.py",
+        "airflow-core/src/airflow/api_fastapi/core_api/services/ui/structure.py"
+      ],
+      "requiredConsequenceTerms": [
+        "nodes",
+        "edges",
+        "asset",
+        "dependency"
+      ],
+      "impactRequired": false
+    },
+    {
+      "repoId": "apache-airflow",
+      "queryId": "af-core-struct-dagrun-clear",
+      "tier": "core",
+      "family": "structure",
+      "query": "airflow-core/src/airflow/api_fastapi/core_api/datamodels/dag_run.py PartitionSelectorMixin BaseDAGRunClear DAGRunClearBody BulkDAGRunClearBody ClearPartitionsBody ClearPartitionsResponse",
+      "difficulty": "medium",
+      "goldenFiles": [
+        "airflow-core/src/airflow/api_fastapi/core_api/datamodels/dag_run.py"
+      ],
+      "goldenSymbols": [
+        "BulkDAGRunClearBody"
+      ],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "airflow-core/src/airflow/api_fastapi/core_api/datamodels/dag_run.py",
+          "to": "BulkDAGRunClearBody"
+        }
+      ],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 2,
+      "requiredEvidenceTerms": [
+        "clear_partitions",
+        "partition_key",
+        "partition_date_start",
+        "partition_date_end",
+        "only_new"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [],
+      "goldenRuntimeArtifacts": [
+        "airflow-core/src/airflow/api_fastapi/core_api/datamodels/dag_run.py"
+      ],
+      "requiredConsequenceTerms": [
+        "partition",
+        "window"
+      ],
+      "impactRequired": false
+    },
+    {
+      "repoId": "apache-airflow",
+      "queryId": "af-core-struct-assets",
+      "tier": "core",
+      "family": "structure",
+      "query": "airflow-core/src/airflow/assets/evaluation.py airflow-core/src/airflow/assets/manager.py airflow-core/src/airflow/models/asset.py AssetEvaluator AssetManager resolve_ref_to_asset expand_alias_to_assets",
+      "difficulty": "medium",
+      "goldenFiles": [
+        "airflow-core/src/airflow/assets/evaluation.py"
+      ],
+      "goldenSymbols": [
+        "AssetEvaluator"
+      ],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "airflow-core/src/airflow/assets/evaluation.py",
+          "to": "AssetEvaluator"
+        }
+      ],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 2,
+      "requiredEvidenceTerms": [
+        "singledispatchmethod",
+        "resolve_ref_to_asset",
+        "expand_alias_to_assets",
+        "asset-alias",
+        "allow_global_consumers"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [],
+      "goldenRuntimeArtifacts": [
+        "airflow-core/src/airflow/assets/evaluation.py"
+      ],
+      "requiredConsequenceTerms": [],
+      "impactRequired": false
+    },
+    {
+      "repoId": "apache-airflow",
+      "queryId": "af-core-impact-exec-conn",
+      "tier": "core",
+      "family": "impact",
+      "query": "airflow-core/src/airflow/api_fastapi/execution_api/routes/connections.py airflow-core/src/airflow/api_fastapi/execution_api/datamodels/connection.py get_connection ConnectionResponse",
+      "difficulty": "hard",
+      "goldenFiles": [
+        "airflow-core/src/airflow/api_fastapi/execution_api/routes/connections.py"
+      ],
+      "goldenSymbols": [
+        "get_connection"
+      ],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "airflow-core/src/airflow/api_fastapi/execution_api/routes/connections.py",
+          "to": "get_connection"
+        }
+      ],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 2,
+      "requiredEvidenceTerms": [
+        "conn_id",
+        "extra",
+        "password",
+        "access_denied",
+        "not_found"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [],
+      "goldenRuntimeArtifacts": [
+        "airflow-core/src/airflow/api_fastapi/execution_api/routes/connections.py"
+      ],
+      "requiredConsequenceTerms": [
+        "extra",
+        "team_name"
+      ],
+      "impactRequired": true
+    },
+    {
+      "repoId": "apache-airflow",
+      "queryId": "af-core-impact-dagrun-patch",
+      "tier": "core",
+      "family": "impact",
+      "query": "airflow-core/src/airflow/api_fastapi/core_api/routes/public/dag_run.py airflow-core/src/airflow/api_fastapi/core_api/services/public/dag_run.py airflow-core/src/airflow/api_fastapi/common/dagbag.py airflow-core/src/airflow/api_fastapi/core_api/datamodels/dag_run.py patch_dag_run patch_dag_run_state patch_dag_run_note perform_clear_dag_run resolve_run_on_latest_version DAGRunResponse DagRunWaiter",
+      "difficulty": "hard",
+      "goldenFiles": [
+        "airflow-core/src/airflow/api_fastapi/core_api/routes/public/dag_run.py",
+        "airflow-core/src/airflow/api_fastapi/core_api/services/public/dag_run.py"
+      ],
+      "goldenSymbols": [
+        "perform_clear_dag_run"
+      ],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "airflow-core/src/airflow/api_fastapi/core_api/services/public/dag_run.py",
+          "to": "perform_clear_dag_run"
+        }
+      ],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 3,
+      "requiredEvidenceTerms": [
+        "queued",
+        "success",
+        "failed",
+        "listener",
+        "note"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [],
+      "goldenRuntimeArtifacts": [
+        "airflow-core/src/airflow/api_fastapi/core_api/routes/public/dag_run.py",
+        "airflow-core/src/airflow/api_fastapi/core_api/services/public/dag_run.py"
+      ],
+      "requiredConsequenceTerms": [
+        "queued",
+        "failed",
+        "success",
+        "note"
+      ],
+      "impactRequired": true
+    },
+    {
+      "repoId": "apache-airflow",
+      "queryId": "af-core-fresh-conn-tests",
+      "tier": "core",
+      "family": "freshness",
+      "query": "airflow-core/src/airflow/api_fastapi/execution_api/versions/v2026_06_30.py airflow-core/src/airflow/api_fastapi/execution_api/routes/connection_tests.py airflow-core/src/airflow/api_fastapi/execution_api/datamodels/connection_test.py airflow-core/src/airflow/api_fastapi/execution_api/versions/v2026_04_06.py AddConnectionTestEndpoint AddVariableKeysEndpoint AddTaskAndAssetStateStoreEndpoints get_connection_test_connection patch_connection_test ConnectionTestResultBody",
+      "difficulty": "hard",
+      "goldenFiles": [
+        "airflow-core/src/airflow/api_fastapi/execution_api/versions/v2026_06_30.py"
+      ],
+      "goldenSymbols": [
+        "AddConnectionTestEndpoint",
+        "AddVariableKeysEndpoint",
+        "AddTaskAndAssetStateStoreEndpoints"
+      ],
+      "goldenRelations": [],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 2,
+      "requiredEvidenceTerms": [
+        "didnt_exist",
+        "connection-tests",
+        "versionedapirouter",
+        "store/asset",
+        "variables/keys"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [
+          "airflow-core/src/airflow/api_fastapi/execution_api/versions/v2026_06_30.py"
+        ],
+        "staleTargets": []
+      },
+      "goldenTests": [],
+      "goldenRuntimeArtifacts": [
+        "airflow-core/src/airflow/api_fastapi/execution_api/versions/v2026_06_30.py"
+      ],
+      "requiredConsequenceTerms": [
+        "endpoint"
+      ],
+      "impactRequired": false
+    },
+    {
+      "repoId": "apache-airflow",
+      "queryId": "af-core-fresh-exec-schema",
+      "tier": "core",
+      "family": "freshness",
+      "query": "airflow-core/src/airflow/api_fastapi/execution_api/versions/v2026_06_30.py airflow-core/src/airflow/api_fastapi/execution_api/datamodels/dagrun.py airflow-core/src/airflow/api_fastapi/execution_api/datamodels/taskinstance.py airflow-core/src/airflow/api_fastapi/execution_api/versions/v2026_04_06.py AddTeamNameField AddPartitionDateField AddTaskInstanceQueueField AddRetryPolicyFields AddAwaitingInputStatePayload",
+      "difficulty": "hard",
+      "goldenFiles": [
+        "airflow-core/src/airflow/api_fastapi/execution_api/versions/v2026_06_30.py"
+      ],
+      "goldenSymbols": [
+        "AddTaskInstanceQueueField",
+        "AddRetryPolicyFields"
+      ],
+      "goldenRelations": [],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 2,
+      "requiredEvidenceTerms": [
+        "team_name",
+        "partition_date",
+        "queue",
+        "didnt_exist"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [
+          "airflow-core/src/airflow/api_fastapi/execution_api/versions/v2026_06_30.py"
+        ],
+        "staleTargets": []
+      },
+      "goldenTests": [],
+      "goldenRuntimeArtifacts": [
+        "airflow-core/src/airflow/api_fastapi/execution_api/versions/v2026_06_30.py"
+      ],
+      "requiredConsequenceTerms": [
+        "team_name",
+        "partition_date",
+        "queue"
+      ],
+      "impactRequired": false
+    }
+  ],
+  "grafana": [
+    {
+      "repoId": "grafana",
+      "queryId": "grafana-rh-migration-cache",
+      "tier": "extended",
+      "family": "retrievalHeavy",
+      "query": "apps/dashboard/pkg/migration/migrate.go apps/dashboard/pkg/migration/schemaversion/cache.go Initialize PreloadCache PreloadCacheInBackground ResetForTesting cachedProvider::Preload cachedProvider::Get",
+      "difficulty": "hard",
+      "goldenFiles": [
+        "apps/dashboard/pkg/migration/migrate.go"
+      ],
+      "goldenSymbols": [
+        "ResetForTesting"
+      ],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "apps/dashboard/pkg/migration/migrate.go",
+          "to": "ResetForTesting"
+        }
+      ],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 2,
+      "requiredEvidenceTerms": [
+        "cache",
+        "preload",
+        "migrator",
+        "namespace",
+        "ttl"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [
+        "apps/dashboard/pkg/migration/migrate_test.go",
+        "apps/dashboard/pkg/migration/schemaversion/cache_test.go"
+      ],
+      "goldenRuntimeArtifacts": [
+        "apps/dashboard/pkg/migration/migrate.go"
+      ],
+      "requiredConsequenceTerms": [],
+      "impactRequired": false
+    },
+    {
+      "repoId": "grafana",
+      "queryId": "grafana-rh-setting-load",
+      "tier": "extended",
+      "family": "retrievalHeavy",
+      "query": "pkg/setting/setting.go NewCfg NewCfgFromArgs Load parseINIFile readProvisioningSettings ResolveGrafanaComProxyAPIToken",
+      "difficulty": "hard",
+      "goldenFiles": [
+        "pkg/setting/setting.go"
+      ],
+      "goldenSymbols": [
+        "parseINIFile"
+      ],
+      "goldenRelations": [],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 2,
+      "requiredEvidenceTerms": [
+        "ini",
+        "provisioning",
+        "proxy",
+        "token",
+        "settings"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [
+        "pkg/setting/setting_test.go"
+      ],
+      "goldenRuntimeArtifacts": [
+        "pkg/setting/setting.go"
+      ],
+      "requiredConsequenceTerms": [],
+      "impactRequired": false
+    },
+    {
+      "repoId": "grafana",
+      "queryId": "grafana-flow-recent-queries",
+      "tier": "extended",
+      "family": "flow",
+      "query": "public/app/features/explore/RecentQueries/useRecentQueriesData.ts public/app/features/explore/RecentQueries/filterDefaults.ts useRecentQueriesData defaultSortingOption getStoredFilterDefaults storeFilterDefaults",
+      "difficulty": "medium",
+      "goldenFiles": [
+        "public/app/features/explore/RecentQueries/useRecentQueriesData.ts",
+        "public/app/features/explore/RecentQueries/filterDefaults.ts"
+      ],
+      "goldenSymbols": [
+        "useRecentQueriesData",
+        "defaultSortingOption",
+        "getStoredFilterDefaults",
+        "storeFilterDefaults"
+      ],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "public/app/features/explore/RecentQueries/useRecentQueriesData.ts",
+          "to": "useRecentQueriesData"
+        },
+        {
+          "kind": "contains",
+          "from": "public/app/features/explore/RecentQueries/useRecentQueriesData.ts",
+          "to": "defaultSortingOption"
+        },
+        {
+          "kind": "contains",
+          "from": "public/app/features/explore/RecentQueries/filterDefaults.ts",
+          "to": "getStoredFilterDefaults"
+        },
+        {
+          "kind": "contains",
+          "from": "public/app/features/explore/RecentQueries/filterDefaults.ts",
+          "to": "storeFilterDefaults"
+        }
+      ],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 3,
+      "requiredEvidenceTerms": [
+        "recent",
+        "queries",
+        "starred",
+        "filters",
+        "sorting"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [],
+      "goldenRuntimeArtifacts": [
+        "public/app/features/explore/RecentQueries/useRecentQueriesData.ts",
+        "public/app/features/explore/RecentQueries/filterDefaults.ts"
+      ],
+      "requiredConsequenceTerms": [],
+      "impactRequired": false
+    },
+    {
+      "repoId": "grafana",
+      "queryId": "grafana-flow-trace-view",
+      "tier": "extended",
+      "family": "flow",
+      "query": "public/app/features/explore/TraceView/components/TraceTimelineViewer/index.tsx public/app/features/explore/TraceView/components/TraceTimelineViewer/TimelineHeaderRow/TimelineHeaderRow.tsx public/app/features/explore/TraceView/components/TraceTimelineViewer/VirtualizedTraceView.tsx public/app/features/explore/TraceView/components/TraceTimelineViewer/SpanDetail/index.tsx UnthemedTraceTimelineViewer TimelineHeaderRow VirtualizedTraceView SpanDetailRow getStyles NUM_TICKS",
+      "difficulty": "medium",
+      "goldenFiles": [
+        "public/app/features/explore/TraceView/components/TraceTimelineViewer/index.tsx",
+        "public/app/features/explore/TraceView/components/TraceTimelineViewer/VirtualizedTraceView.tsx"
+      ],
+      "goldenSymbols": [
+        "UnthemedTraceTimelineViewer"
+      ],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "public/app/features/explore/TraceView/components/TraceTimelineViewer/index.tsx",
+          "to": "UnthemedTraceTimelineViewer"
+        }
+      ],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 3,
+      "requiredEvidenceTerms": [
+        "trace",
+        "timeline",
+        "span",
+        "header",
+        "collapse"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [],
+      "goldenRuntimeArtifacts": [
+        "public/app/features/explore/TraceView/components/TraceTimelineViewer/index.tsx"
+      ],
+      "requiredConsequenceTerms": [],
+      "impactRequired": false
+    },
+    {
+      "repoId": "grafana",
+      "queryId": "grafana-struct-nav-sort",
+      "tier": "extended",
+      "family": "structure",
+      "query": "pkg/services/navtree/models.go pkg/services/anonymous/sortopts/sortopts.go packages/grafana-data/src/utils/Registry.ts NavTreeRoot Sort RemoveEmptyAdminSections RemoveEmptyConnectionsSection ParseSortQueryParam Registry",
+      "difficulty": "medium",
+      "goldenFiles": [
+        "pkg/services/navtree/models.go"
+      ],
+      "goldenSymbols": [
+        "RemoveEmptyAdminSections"
+      ],
+      "goldenRelations": [],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 2,
+      "requiredEvidenceTerms": [
+        "sort",
+        "nav",
+        "registry",
+        "annotation",
+        "order"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [
+        "pkg/services/navtree/models.go"
+      ],
+      "goldenRuntimeArtifacts": [
+        "pkg/services/navtree/models.go"
+      ],
+      "requiredConsequenceTerms": [],
+      "impactRequired": false
+    },
+    {
+      "repoId": "grafana",
+      "queryId": "grafana-struct-proxy-settings",
+      "tier": "extended",
+      "family": "structure",
+      "query": "pkg/api/pluginproxy/settings.go pkg/registry/apis/datasource/sub_proxy_loader.go NewDataSourceProxySettings datasourceLoader DecryptedValues DecryptedPassword DecryptedBasicAuthPassword GetHTTPTransport ProvideDecrypter",
+      "difficulty": "medium",
+      "goldenFiles": [
+        "pkg/registry/apis/datasource/sub_proxy_loader.go"
+      ],
+      "goldenSymbols": [
+        "DecryptedValues",
+        "DecryptedPassword",
+        "DecryptedBasicAuthPassword"
+      ],
+      "goldenRelations": [],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 2,
+      "requiredEvidenceTerms": [
+        "proxy",
+        "decrypted",
+        "transport",
+        "datasource",
+        "password"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [],
+      "goldenRuntimeArtifacts": [
+        "pkg/registry/apis/datasource/sub_proxy_loader.go"
+      ],
+      "requiredConsequenceTerms": [],
+      "impactRequired": false
+    },
+    {
+      "repoId": "grafana",
+      "queryId": "grafana-impact-datasource-proxy",
+      "tier": "extended",
+      "family": "impact",
+      "query": "pkg/api/pluginproxy/settings.go packages/grafana-ui/src/components/DataSourceSettings/SecureSocksProxySettings.tsx pkg/registry/apis/datasource/sub_proxy_loader.go SecureSocksProxySettings datasourceLoader GetHTTPTransport NewDataSourceProxySettings tests/service/service_test.go",
+      "difficulty": "hard",
+      "goldenFiles": [
+        "packages/grafana-ui/src/components/DataSourceSettings/SecureSocksProxySettings.tsx",
+        "pkg/registry/apis/datasource/sub_proxy_loader.go"
+      ],
+      "goldenSymbols": [],
+      "goldenRelations": [],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 2,
+      "requiredEvidenceTerms": [
+        "proxy",
+        "secure",
+        "socks",
+        "datasource",
+        "transport"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [],
+      "goldenRuntimeArtifacts": [
+        "packages/grafana-ui/src/components/DataSourceSettings/SecureSocksProxySettings.tsx",
+        "pkg/registry/apis/datasource/sub_proxy_loader.go"
+      ],
+      "requiredConsequenceTerms": [
+        "proxy",
+        "datasource"
+      ],
+      "impactRequired": true
+    },
+    {
+      "repoId": "grafana",
+      "queryId": "grafana-fresh-migration-cache",
+      "tier": "extended",
+      "family": "freshness",
+      "query": "apps/dashboard/pkg/migration/migrate.go apps/dashboard/pkg/migration/schemaversion/cache.go Initialize PreloadCache PreloadCacheInBackground ResetForTesting cachedProvider::Preload apps/dashboard/pkg/migration/migrate_test.go",
+      "difficulty": "medium",
+      "goldenFiles": [
+        "apps/dashboard/pkg/migration/migrate.go",
+        "apps/dashboard/pkg/migration/migrate_test.go"
+      ],
+      "goldenSymbols": [],
+      "goldenRelations": [],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 2,
+      "requiredEvidenceTerms": [
+        "cache",
+        "preload",
+        "migrator",
+        "namespace"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [
+          "apps/dashboard/pkg/migration/migrate.go"
+        ],
+        "staleTargets": []
+      },
+      "goldenTests": [
+        "apps/dashboard/pkg/migration/migrate_test.go",
+        "apps/dashboard/pkg/migration/schemaversion/cache_test.go"
+      ],
+      "goldenRuntimeArtifacts": [
+        "apps/dashboard/pkg/migration/migrate.go"
+      ],
+      "requiredConsequenceTerms": [],
+      "impactRequired": false
+    }
+  ],
+  "openmetadata": [
+    {
+      "repoId": "openmetadata",
+      "queryId": "om-rh-entity-subtree",
+      "tier": "extended",
+      "family": "retrievalHeavy",
+      "query": "openmetadata-service/src/main/java/org/openmetadata/service/jdbi3/EntityRepository.java bulkRestoreSubtree bulkSoftDeleteSubtree bulkHardDeleteSubtree deleteChildren cleanup loadForBulk",
+      "difficulty": "hard",
+      "goldenFiles": [
+        "openmetadata-service/src/main/java/org/openmetadata/service/jdbi3/EntityRepository.java",
+        "openmetadata-service/src/test/java/org/openmetadata/service/jdbi3/EntityRepositoryRestoreTest.java"
+      ],
+      "goldenSymbols": [
+        "org.openmetadata.service.jdbi3::EntityRepository::bulkSoftDeleteSubtree",
+        "org.openmetadata.service.jdbi3::EntityRepository::deleteChildren"
+      ],
+      "goldenRelations": [],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 3,
+      "requiredEvidenceTerms": [
+        "bulk",
+        "subtree",
+        "restore",
+        "delete",
+        "cleanup"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [
+          "openmetadata-service/src/main/java/org/openmetadata/service/jdbi3/EntityRepository.java"
+        ],
+        "staleTargets": [
+          "openmetadata-mcp/src/main/java/org/openmetadata/mcp/tools/SearchMetadataTool.java"
+        ]
+      },
+      "goldenTests": [
+        "openmetadata-service/src/test/java/org/openmetadata/service/jdbi3/EntityRepositoryRestoreTest.java"
+      ],
+      "goldenRuntimeArtifacts": [
+        "openmetadata-service/src/main/java/org/openmetadata/service/jdbi3/EntityRepository.java"
+      ],
+      "requiredConsequenceTerms": [],
+      "impactRequired": false
+    },
+    {
+      "repoId": "openmetadata",
+      "queryId": "om-rh-search-rewrite",
+      "tier": "extended",
+      "family": "retrievalHeavy",
+      "query": "openmetadata-service/src/main/java/org/openmetadata/service/search/SearchRepository.java updateEntitiesByReference updateEntitiesIndex deleteEntityByFQNPrefix softDeleteOrRestoreEntityIndex deleteOrUpdateChildren searchLineage",
+      "difficulty": "hard",
+      "goldenFiles": [
+        "openmetadata-service/src/main/java/org/openmetadata/service/search/SearchRepository.java"
+      ],
+      "goldenSymbols": [],
+      "goldenRelations": [],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 1,
+      "requiredEvidenceTerms": [
+        "search",
+        "lineage",
+        "fqn",
+        "prefix",
+        "index"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [
+          "openmetadata-service/src/main/java/org/openmetadata/service/search/SearchRepository.java"
+        ],
+        "staleTargets": [
+          "openmetadata-mcp/src/main/java/org/openmetadata/mcp/tools/GetEntityTool.java"
+        ]
+      },
+      "goldenTests": [],
+      "goldenRuntimeArtifacts": [
+        "openmetadata-service/src/main/java/org/openmetadata/service/search/SearchRepository.java"
+      ],
+      "requiredConsequenceTerms": [],
+      "impactRequired": false
+    },
+    {
+      "repoId": "openmetadata",
+      "queryId": "om-flow-session-activation",
+      "tier": "extended",
+      "family": "flow",
+      "query": "openmetadata-service/src/main/java/org/openmetadata/service/security/session/SessionService.java createActiveSession createPendingSession applySessionLimit completeRefresh releaseRefreshLease revokeSession recordSessionAccess getSessionById registerRevocationListener",
+      "difficulty": "hard",
+      "goldenFiles": [
+        "openmetadata-service/src/main/java/org/openmetadata/service/security/session/SessionService.java",
+        "openmetadata-service/src/test/java/org/openmetadata/service/security/session/SessionServiceTest.java"
+      ],
+      "goldenSymbols": [
+        "org.openmetadata.service.security.session::SessionService::registerRevocationListener",
+        "org.openmetadata.service.security.session::SessionService::revokeSession"
+      ],
+      "goldenRelations": [],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 3,
+      "requiredEvidenceTerms": [
+        "session",
+        "refresh",
+        "lease",
+        "revocation",
+        "access"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [
+        "openmetadata-service/src/test/java/org/openmetadata/service/security/session/SessionServiceTest.java"
+      ],
+      "goldenRuntimeArtifacts": [
+        "openmetadata-service/src/main/java/org/openmetadata/service/security/session/SessionService.java"
+      ],
+      "requiredConsequenceTerms": [],
+      "impactRequired": false
+    },
+    {
+      "repoId": "openmetadata",
+      "queryId": "om-flow-jwt-filter",
+      "tier": "extended",
+      "family": "flow",
+      "query": "openmetadata-service/src/main/java/org/openmetadata/service/security/JwtFilter.java openmetadata-service/src/main/java/org/openmetadata/service/security/AuthServeletHandlerRegistry.java filter checkValidationsForToken getSessionService setSessionService",
+      "difficulty": "medium",
+      "goldenFiles": [
+        "openmetadata-service/src/main/java/org/openmetadata/service/security/JwtFilter.java"
+      ],
+      "goldenSymbols": [
+        "org.openmetadata.service.security::JwtFilter::checkValidationsForToken"
+      ],
+      "goldenRelations": [],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 2,
+      "requiredEvidenceTerms": [
+        "jwt",
+        "token",
+        "session",
+        "filter",
+        "registry"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [
+        "openmetadata-service/src/test/java/org/openmetadata/service/security/JwtFilterTest.java"
+      ],
+      "goldenRuntimeArtifacts": [
+        "openmetadata-service/src/main/java/org/openmetadata/service/security/JwtFilter.java"
+      ],
+      "requiredConsequenceTerms": [],
+      "impactRequired": false
+    },
+    {
+      "repoId": "openmetadata",
+      "queryId": "om-struct-delete-hooks",
+      "tier": "extended",
+      "family": "structure",
+      "query": "openmetadata-service/src/main/java/org/openmetadata/service/jdbi3/EntityRepository.java bulkRestoreSubtree bulkSoftDeleteSubtree bulkHardDeleteSubtree loadForBulk deleteChildren cleanup",
+      "difficulty": "medium",
+      "goldenFiles": [
+        "openmetadata-service/src/main/java/org/openmetadata/service/jdbi3/EntityRepository.java",
+        "openmetadata-service/src/test/java/org/openmetadata/service/jdbi3/EntityRepositoryRestoreTest.java"
+      ],
+      "goldenSymbols": [
+        "org.openmetadata.service.jdbi3::EntityRepository::bulkSoftDeleteSubtree"
+      ],
+      "goldenRelations": [],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 3,
+      "requiredEvidenceTerms": [
+        "restore",
+        "delete",
+        "children",
+        "bulk",
+        "load"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [
+        "openmetadata-service/src/test/java/org/openmetadata/service/jdbi3/EntityRepositoryRestoreTest.java"
+      ],
+      "goldenRuntimeArtifacts": [
+        "openmetadata-service/src/main/java/org/openmetadata/service/jdbi3/EntityRepository.java"
+      ],
+      "requiredConsequenceTerms": [],
+      "impactRequired": false
+    },
+    {
+      "repoId": "openmetadata",
+      "queryId": "om-struct-search-plumbing",
+      "tier": "extended",
+      "family": "structure",
+      "query": "openmetadata-service/src/main/java/org/openmetadata/service/search/SearchRepository.java deleteEntityByFQNPrefix softDeleteOrRestoreEntityIndex deleteOrUpdateChildren searchLineage updateEntitiesByReference",
+      "difficulty": "medium",
+      "goldenFiles": [
+        "openmetadata-service/src/main/java/org/openmetadata/service/search/SearchRepository.java"
+      ],
+      "goldenSymbols": [],
+      "goldenRelations": [],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 1,
+      "requiredEvidenceTerms": [
+        "search",
+        "lineage",
+        "fqn",
+        "prefix",
+        "children"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [],
+      "goldenRuntimeArtifacts": [
+        "openmetadata-service/src/main/java/org/openmetadata/service/search/SearchRepository.java"
+      ],
+      "requiredConsequenceTerms": [],
+      "impactRequired": false
+    },
+    {
+      "repoId": "openmetadata",
+      "queryId": "om-impact-jwt-session",
+      "tier": "extended",
+      "family": "impact",
+      "query": "openmetadata-service/src/main/java/org/openmetadata/service/security/JwtFilter.java openmetadata-service/src/main/java/org/openmetadata/service/security/session/SessionService.java openmetadata-service/src/main/java/org/openmetadata/service/security/AuthServeletHandlerRegistry.java filter checkValidationsForToken revokeSession registerRevocationListener getSessionService",
+      "difficulty": "hard",
+      "goldenFiles": [
+        "openmetadata-service/src/main/java/org/openmetadata/service/security/JwtFilter.java"
+      ],
+      "goldenSymbols": [
+        "org.openmetadata.service.security::JwtFilter::checkValidationsForToken"
+      ],
+      "goldenRelations": [],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 2,
+      "requiredEvidenceTerms": [
+        "jwt",
+        "session",
+        "token",
+        "refresh",
+        "revocation"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [],
+      "goldenRuntimeArtifacts": [
+        "openmetadata-service/src/main/java/org/openmetadata/service/security/JwtFilter.java"
+      ],
+      "requiredConsequenceTerms": [
+        "jwt",
+        "session",
+        "token",
+        "refresh",
+        "revocation"
+      ],
+      "impactRequired": true
+    },
+    {
+      "repoId": "openmetadata",
+      "queryId": "om-fresh-search-session",
+      "tier": "extended",
+      "family": "freshness",
+      "query": "openmetadata-service/src/main/java/org/openmetadata/service/search/SearchRepository.java openmetadata-service/src/main/java/org/openmetadata/service/security/session/SessionService.java searchLineage createActiveSession revokeSession deleteOrUpdateChildren",
+      "difficulty": "medium",
+      "goldenFiles": [
+        "openmetadata-service/src/main/java/org/openmetadata/service/security/session/SessionService.java"
+      ],
+      "goldenSymbols": [
+        "org.openmetadata.service.security.session::SessionService::revokeSession"
+      ],
+      "goldenRelations": [],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 2,
+      "requiredEvidenceTerms": [
+        "search",
+        "session",
+        "lineage",
+        "refresh"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [
+          "openmetadata-service/src/main/java/org/openmetadata/service/util/LineageUtil.java"
+        ],
+        "staleTargets": []
+      },
+      "goldenTests": [],
+      "goldenRuntimeArtifacts": [
+        "openmetadata-service/src/main/java/org/openmetadata/service/security/session/SessionService.java"
+      ],
+      "requiredConsequenceTerms": [],
+      "impactRequired": false
+    }
+  ],
+  "airbyte": [
+    {
+      "repoId": "airbyte",
+      "queryId": "airbyte-rh-couchbase-source-tests",
+      "tier": "stress",
+      "family": "retrievalHeavy",
+      "query": "SourceCouchbase test_streams test_check_connection test_get_cluster test_set_config_values",
+      "difficulty": "hard",
+      "goldenFiles": [
+        "airbyte-integrations/connectors/source-couchbase/source_couchbase/source.py",
+        "airbyte-integrations/connectors/source-couchbase/unit_tests/test_unit_source.py"
+      ],
+      "goldenSymbols": [
+        "SourceCouchbase::name",
+        "SourceCouchbase::_set_config_values",
+        "SourceCouchbase::streams",
+        "SourceCouchbase::check_connection",
+        "test_streams",
+        "test_check_connection",
+        "test_get_cluster",
+        "test_set_config_values",
+        "test_ensure_primary_index"
+      ],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/source-couchbase/source_couchbase/source.py",
+          "to": "SourceCouchbase::name"
+        },
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/source-couchbase/source_couchbase/source.py",
+          "to": "SourceCouchbase::_set_config_values"
+        },
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/source-couchbase/source_couchbase/source.py",
+          "to": "SourceCouchbase::streams"
+        },
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/source-couchbase/source_couchbase/source.py",
+          "to": "SourceCouchbase::check_connection"
+        },
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/source-couchbase/unit_tests/test_unit_source.py",
+          "to": "test_streams"
+        },
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/source-couchbase/unit_tests/test_unit_source.py",
+          "to": "test_check_connection"
+        },
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/source-couchbase/unit_tests/test_unit_source.py",
+          "to": "test_get_cluster"
+        },
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/source-couchbase/unit_tests/test_unit_source.py",
+          "to": "test_set_config_values"
+        },
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/source-couchbase/unit_tests/test_unit_source.py",
+          "to": "test_ensure_primary_index"
+        }
+      ],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 3,
+      "requiredEvidenceTerms": [
+        "couchbase",
+        "cluster",
+        "bucket",
+        "stream",
+        "query"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [
+        "airbyte-integrations/connectors/source-couchbase/unit_tests/test_unit_source.py"
+      ],
+      "goldenRuntimeArtifacts": [
+        "airbyte-integrations/connectors/source-couchbase/source_couchbase/source.py"
+      ],
+      "requiredConsequenceTerms": [],
+      "impactRequired": false
+    },
+    {
+      "repoId": "airbyte",
+      "queryId": "airbyte-connector-couchbase-source-runtime",
+      "tier": "stress",
+      "family": "connector-discovery",
+      "query": "SourceCouchbase test_streams test_check_connection test_get_cluster",
+      "difficulty": "medium",
+      "goldenFiles": [
+        "airbyte-integrations/connectors/source-couchbase/source_couchbase/source.py",
+        "airbyte-integrations/connectors/source-couchbase/unit_tests/test_unit_source.py"
+      ],
+      "goldenSymbols": [
+        "SourceCouchbase::_get_cluster",
+        "SourceCouchbase::streams",
+        "SourceCouchbase::check_connection",
+        "test_streams",
+        "test_check_connection",
+        "test_get_cluster"
+      ],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/source-couchbase/source_couchbase/source.py",
+          "to": "SourceCouchbase::_get_cluster"
+        },
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/source-couchbase/source_couchbase/source.py",
+          "to": "SourceCouchbase::streams"
+        },
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/source-couchbase/source_couchbase/source.py",
+          "to": "SourceCouchbase::check_connection"
+        },
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/source-couchbase/unit_tests/test_unit_source.py",
+          "to": "test_streams"
+        },
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/source-couchbase/unit_tests/test_unit_source.py",
+          "to": "test_check_connection"
+        },
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/source-couchbase/unit_tests/test_unit_source.py",
+          "to": "test_get_cluster"
+        }
+      ],
+      "goldenImplementations": [
+        "SourceCouchbase::streams"
+      ],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 3,
+      "requiredEvidenceTerms": [
+        "bucket",
+        "stream",
+        "index",
+        "cursor",
+        "query"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [
+        "airbyte-integrations/connectors/source-couchbase/unit_tests/test_unit_source.py"
+      ],
+      "goldenRuntimeArtifacts": [
+        "airbyte-integrations/connectors/source-couchbase/source_couchbase/source.py"
+      ],
+      "requiredConsequenceTerms": [],
+      "impactRequired": false
+    },
+    {
+      "repoId": "airbyte",
+      "queryId": "airbyte-connector-destination-sqlite",
+      "tier": "stress",
+      "family": "connector-discovery",
+      "query": "DestinationSqlite _get_destination_path write check test_get_destination_path",
+      "difficulty": "medium",
+      "goldenFiles": [
+        "airbyte-integrations/connectors/destination-sqlite/destination_sqlite/destination.py",
+        "airbyte-integrations/connectors/destination-sqlite/integration_tests/integration_test.py"
+      ],
+      "goldenSymbols": [
+        "DestinationSqlite::_get_destination_path",
+        "DestinationSqlite::check",
+        "test_write"
+      ],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/destination-sqlite/destination_sqlite/destination.py",
+          "to": "DestinationSqlite::_get_destination_path"
+        },
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/destination-sqlite/destination_sqlite/destination.py",
+          "to": "DestinationSqlite::check"
+        },
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/destination-sqlite/integration_tests/integration_test.py",
+          "to": "test_write"
+        }
+      ],
+      "goldenImplementations": [
+        "DestinationSqlite::_get_destination_path"
+      ],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 3,
+      "requiredEvidenceTerms": [
+        "sqlite",
+        "destination",
+        "table",
+        "path",
+        "record"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [
+        "airbyte-integrations/connectors/destination-sqlite/integration_tests/integration_test.py"
+      ],
+      "goldenRuntimeArtifacts": [
+        "airbyte-integrations/connectors/destination-sqlite/destination_sqlite/destination.py"
+      ],
+      "requiredConsequenceTerms": [],
+      "impactRequired": false
+    },
+    {
+      "repoId": "airbyte",
+      "queryId": "airbyte-config-runtime-firebase",
+      "tier": "stress",
+      "family": "config-to-runtime",
+      "query": "SourceFirebaseRealtimeDatabase stream_name_from test_stream_name_from test_records",
+      "difficulty": "hard",
+      "goldenFiles": [
+        "airbyte-integrations/connectors/source-firebase-realtime-database/source_firebase_realtime_database/source.py",
+        "airbyte-integrations/connectors/source-firebase-realtime-database/unit_tests/unit_test.py"
+      ],
+      "goldenSymbols": [
+        "SourceFirebaseRealtimeDatabase",
+        "SourceFirebaseRealtimeDatabase::check",
+        "SourceFirebaseRealtimeDatabase::read",
+        "PseudoClient",
+        "PseudoClient::__init__",
+        "PseudoClient::fetch_records",
+        "test_stream_name_from",
+        "test_records"
+      ],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/source-firebase-realtime-database/source_firebase_realtime_database/source.py",
+          "to": "SourceFirebaseRealtimeDatabase"
+        },
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/source-firebase-realtime-database/source_firebase_realtime_database/source.py",
+          "to": "SourceFirebaseRealtimeDatabase::check"
+        },
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/source-firebase-realtime-database/source_firebase_realtime_database/source.py",
+          "to": "SourceFirebaseRealtimeDatabase::read"
+        },
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/source-firebase-realtime-database/unit_tests/unit_test.py",
+          "to": "PseudoClient"
+        },
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/source-firebase-realtime-database/unit_tests/unit_test.py",
+          "to": "PseudoClient::__init__"
+        },
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/source-firebase-realtime-database/unit_tests/unit_test.py",
+          "to": "PseudoClient::fetch_records"
+        },
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/source-firebase-realtime-database/unit_tests/unit_test.py",
+          "to": "test_stream_name_from"
+        },
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/source-firebase-realtime-database/unit_tests/unit_test.py",
+          "to": "test_records"
+        }
+      ],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 3,
+      "requiredEvidenceTerms": [
+        "database",
+        "buffer_size",
+        "credentials",
+        "record",
+        "path"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [
+        "airbyte-integrations/connectors/source-firebase-realtime-database/unit_tests/unit_test.py"
+      ],
+      "goldenRuntimeArtifacts": [
+        "airbyte-integrations/connectors/source-firebase-realtime-database/source_firebase_realtime_database/source.py"
+      ],
+      "requiredConsequenceTerms": [],
+      "impactRequired": true
+    },
+    {
+      "repoId": "airbyte",
+      "queryId": "airbyte-freshness-twilio-manifest",
+      "tier": "stress",
+      "family": "freshness",
+      "query": "TwilioStateMigration TwilioAlertsStateMigration TwilioUsageRecordsStateMigration test_streams test_next_page_token test_transform_function",
+      "difficulty": "medium",
+      "goldenFiles": [
+        "airbyte-integrations/connectors/source-twilio/components.py",
+        "airbyte-integrations/connectors/source-twilio/unit_tests/test_streams.py"
+      ],
+      "goldenSymbols": [
+        "TwilioUsageRecordsStateMigration",
+        "TwilioUsageRecordsStateMigration::migrate",
+        "TwilioUsageRecordsStateMigration::should_migrate",
+        "TestTwilioStream",
+        "TestIncrementalTwilioStream"
+      ],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/source-twilio/components.py",
+          "to": "TwilioUsageRecordsStateMigration"
+        },
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/source-twilio/components.py",
+          "to": "TwilioUsageRecordsStateMigration::migrate"
+        },
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/source-twilio/components.py",
+          "to": "TwilioUsageRecordsStateMigration::should_migrate"
+        },
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/source-twilio/unit_tests/test_streams.py",
+          "to": "TestTwilioStream"
+        },
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/source-twilio/unit_tests/test_streams.py",
+          "to": "TestIncrementalTwilioStream"
+        }
+      ],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 3,
+      "requiredEvidenceTerms": [
+        "manifest",
+        "schema",
+        "state",
+        "migration",
+        "record"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [
+          "airbyte-integrations/connectors/source-twilio/components.py"
+        ],
+        "staleTargets": []
+      },
+      "goldenTests": [
+        "airbyte-integrations/connectors/source-twilio/unit_tests/test_streams.py"
+      ],
+      "goldenRuntimeArtifacts": [
+        "airbyte-integrations/connectors/source-twilio/components.py"
+      ],
+      "requiredConsequenceTerms": [],
+      "impactRequired": false
+    },
+    {
+      "repoId": "airbyte",
+      "queryId": "airbyte-impact-twilio-state-migrations",
+      "tier": "stress",
+      "family": "affected-tests",
+      "query": "TwilioUsageRecordsStateMigration usage_records test_usage_records_404_handling test_streams TwilioStateMigration",
+      "difficulty": "hard",
+      "goldenFiles": [
+        "airbyte-integrations/connectors/source-twilio/components.py",
+        "airbyte-integrations/connectors/source-twilio/unit_tests/test_streams.py",
+        "airbyte-integrations/connectors/source-twilio/unit_tests/test_usage_records_404_handling.py"
+      ],
+      "goldenSymbols": [
+        "TwilioUsageRecordsStateMigration",
+        "TwilioUsageRecordsStateMigration::migrate",
+        "TwilioUsageRecordsStateMigration::should_migrate",
+        "TestIncrementalTwilioStream",
+        "TestUsageRecords404Handling",
+        "TestUsageRecords404Handling::test_usage_records_ignores_404_responses",
+        "TestUsageRecords404Handling::test_usage_records_incremental_with_404_handling"
+      ],
+      "goldenRelations": [
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/source-twilio/components.py",
+          "to": "TwilioUsageRecordsStateMigration"
+        },
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/source-twilio/components.py",
+          "to": "TwilioUsageRecordsStateMigration::migrate"
+        },
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/source-twilio/components.py",
+          "to": "TwilioUsageRecordsStateMigration::should_migrate"
+        },
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/source-twilio/unit_tests/test_streams.py",
+          "to": "TestIncrementalTwilioStream"
+        },
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/source-twilio/unit_tests/test_usage_records_404_handling.py",
+          "to": "TestUsageRecords404Handling"
+        },
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/source-twilio/unit_tests/test_usage_records_404_handling.py",
+          "to": "TestUsageRecords404Handling::test_usage_records_ignores_404_responses"
+        },
+        {
+          "kind": "contains",
+          "from": "airbyte-integrations/connectors/source-twilio/unit_tests/test_usage_records_404_handling.py",
+          "to": "TestUsageRecords404Handling::test_usage_records_incremental_with_404_handling"
+        }
+      ],
+      "goldenImplementations": [],
+      "acceptableAlternates": [],
+      "invalidImplementations": [],
+      "requiredTopK": 4,
+      "requiredEvidenceTerms": [
+        "404",
+        "skipping",
+        "state",
+        "parent_slice",
+        "lookback_window"
+      ],
+      "forbiddenFalsePositives": [],
+      "freshnessSetup": {
+        "newTargets": [],
+        "staleTargets": []
+      },
+      "goldenTests": [
+        "airbyte-integrations/connectors/source-twilio/unit_tests/test_usage_records_404_handling.py",
+        "airbyte-integrations/connectors/source-twilio/unit_tests/test_streams.py"
+      ],
+      "goldenRuntimeArtifacts": [
+        "airbyte-integrations/connectors/source-twilio/components.py"
+      ],
+      "requiredConsequenceTerms": [
+        "404",
+        "skipping",
+        "state",
+        "parent_slice",
+        "lookback_window"
+      ],
+      "impactRequired": true
+    }
+  ]
+}

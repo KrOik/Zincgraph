@@ -53,3 +53,4 @@ Phase 0 ──> Phase 1 ──> Phase 2 ──> Phase 3 ──> Phase 4 ──> 
 
 - [CodeGraph vs Zincgraph Benchmark Plan](./benchmarks/codegraph-vs-zincgraph.md)
 - [Code RAG / 本地代码索引工具的 Benchmark 与同类项目](./benchmarks/code-rag-index-benchmarks-and-tools.md)
+- [Open-Source Benchmark Pool and Scoring Standard](./benchmarks/open-source-benchmark-pool.md)

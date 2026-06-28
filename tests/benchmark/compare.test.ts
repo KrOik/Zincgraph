@@ -18,6 +18,7 @@ import {
   countFreshnessCooccurrenceHits,
   countFreshnessTermHits,
   createRunSlots,
+  loadBenchmarkPool,
   createSpawnOptions,
   runIsolatedUpdateTask,
   runPreflight,
@@ -196,6 +197,13 @@ describe('benchmark scorer', () => {
       confidence: 'local-deterministic',
       projectPath: '/repo',
       benchmarkProjectPath: '/tmp/repo-copy',
+      benchmarkPool: {
+        schemaVersion: 1,
+        scoreModelVersion: '2026-06-27-v1',
+        repoCount: 6,
+        tierCounts: { core: 3, extended: 2, stress: 1 },
+        caseCounts: { core: 30, extended: 16, stress: 6 }
+      },
       runsPerCommand: 1,
       winner: { byComparison: 'zincgraph-fusion', byTotal: 'zincgraph-fusion', diagnosticByLegacyTotal: 'codegraph' },
       preflight: { warnings: [] },
@@ -221,6 +229,18 @@ describe('benchmark scorer', () => {
     expect(report).toContain('Normalization baselines');
     expect(report).toContain('Benchmark category coverage');
     expect(report).toContain(TASK_CATEGORIES.CROSS_MODULE);
+    expect(report).toContain('Benchmark Pool Contract');
+    expect(report).toContain('repoCount: 6');
+    expect(report).toContain('scoreModelVersion: 2026-06-27-v1');
+  });
+
+  test('loads benchmark pool manifest summary from the machine-readable contract', () => {
+    const pool = loadBenchmarkPool();
+    expect(pool.schemaVersion).toBe(1);
+    expect(pool.scoreModelVersion).toBe('2026-06-27-v1');
+    expect(pool.repoCount).toBe(6);
+    expect(pool.tierCounts).toEqual({ core: 3, extended: 2, stress: 1 });
+    expect(pool.caseCounts).toEqual({ core: 30, extended: 16, stress: 6 });
   });
 });
 
