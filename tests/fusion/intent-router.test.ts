@@ -15,6 +15,26 @@ describe('Phase 2 intent router', () => {
     expect(routeQuery('path:src/api authenticate')).toBe('graph-first-filter');
   });
 
+  test('routes bare path-heavy queries graph-first-filter', () => {
+    expect(routeQuery('src/fusion/intent-router.ts parseFusionQuery')).toBe('graph-first-filter');
+  });
+
+  test('keeps graph-navigation hints ahead of bare path-heavy detection', () => {
+    expect(routeQuery('src/fusion/intent-router.ts flow')).toBe('hybrid');
+  });
+
+  test('routes exact symbol bundles graph-first', () => {
+    const parsed = parseFusionQuery('SourceCouchbase test_streams test_check_connection test_get_cluster');
+    expect(parsed.intent).toBe('exact-symbol');
+    expect(parsed.route).toBe('graph-first');
+  });
+
+  test('routes anchor-dense mixed bundles graph-first', () => {
+    const parsed = parseFusionQuery('TwilioUsageRecordsStateMigration usage_records test_usage_records_404_handling test_streams TwilioStateMigration');
+    expect(parsed.intent).toBe('exact-symbol');
+    expect(parsed.route).toBe('graph-first');
+  });
+
   test('routes semantic similarity queries vector-first', () => {
     expect(routeQuery('similar to token validation')).toBe('vector-first');
   });

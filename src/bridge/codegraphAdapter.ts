@@ -206,9 +206,16 @@ function bundledCodeGraphLauncher(): CodeGraphLauncher | null {
   if (!packageRoot) {
     return null;
   }
+  const entry = resolve(packageRoot, 'lib/dist/bin/codegraph.js');
+  if (existsSync(entry)) {
+    return {
+      command: process.execPath,
+      argsPrefix: process.platform === 'win32' ? ['--liftoff-only', entry] : [entry],
+      displayCommand: entry
+    };
+  }
   if (process.platform === 'win32') {
     const nodeExe = resolve(packageRoot, 'node.exe');
-    const entry = resolve(packageRoot, 'lib/dist/bin/codegraph.js');
     if (existsSync(nodeExe) && existsSync(entry)) {
       return {
         command: nodeExe,

@@ -8,10 +8,11 @@ import { validateBenchmarkPoolContract } from '../../bench/pool-status.mjs';
 
 describe('benchmark pool sync', () => {
   test('parses dry-run and tier filters', () => {
-    const options = parsePoolSyncArgs(['--dry-run', '--no-shallow', '--tier', 'core', '--tier', 'stress']);
+    const options = parsePoolSyncArgs(['--dry-run', '--no-shallow', '--tier', 'core', '--tier', 'stress', '--repo', 'airbyte']);
     expect(options.dryRun).toBe(true);
     expect(options.shallow).toBe(false);
     expect(options.tiers).toEqual(['core', 'stress']);
+    expect(options.repos).toEqual(['airbyte']);
   });
 
   test('dry-run does not create benchmark directories', () => {
@@ -51,6 +52,51 @@ describe('benchmark pool sync', () => {
     expect(existsSync(join(tempRoot, 'bench/corpora/core'))).toBe(false);
     expect(existsSync(join(tempRoot, 'bench/corpora/extended'))).toBe(false);
     expect(existsSync(join(tempRoot, 'bench/worktrees'))).toBe(false);
+  });
+
+  test('repo filter restricts materialization planning to selected repos', () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'zincgraph-pool-sync-filter-'));
+    const poolPath = join(tempRoot, 'bench/local-pool.json');
+    mkdirSync(join(tempRoot, 'bench'), { recursive: true });
+    writeFileSync(poolPath, JSON.stringify({
+      schemaVersion: 1,
+      scoreModel: { version: '2026-06-27-v1' },
+      baselinePolicy: { acceptedField: 'accepted' },
+      repoLayout: {
+        coreRoot: 'bench/corpora/core',
+        extendedRoot: 'bench/corpora/extended',
+        stressRoot: 'bench/worktrees'
+      },
+      repos: [
+        {
+          id: 'core-a',
+          tier: 'core',
+          repoUrl: 'https://github.com/example/core-a.git',
+          path: 'bench/corpora/core/core-a',
+          acquisition: 'submodule',
+          cases: { count: 1, mix: { retrievalHeavy: 1 } }
+        },
+        {
+          id: 'core-b',
+          tier: 'core',
+          repoUrl: 'https://github.com/example/core-b.git',
+          path: 'bench/corpora/core/core-b',
+          acquisition: 'submodule',
+          cases: { count: 1, mix: { retrievalHeavy: 1 } }
+        }
+      ]
+    }, null, 2));
+
+    const result = materializeBenchmarkPool({
+      rootDir: tempRoot,
+      poolPath,
+      dryRun: true,
+      repos: ['core-b']
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.actions).toHaveLength(1);
+    expect(result.actions[0]?.repoId).toBe('core-b');
   });
 
   test('materializes local fixture repos and strict validation passes', () => {

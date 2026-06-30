@@ -155,6 +155,22 @@ interface CandidateDraft {
   content: string;
 }
 
+interface QueryFocusAnchor {
+  node: CodeGraphSnapshotNode;
+  pathMatched: boolean;
+  symbolMatched: boolean;
+  exactSymbolMatched: boolean;
+}
+
+interface QueryFocus {
+  anchors: readonly QueryFocusAnchor[];
+}
+
+interface QueryFocusBoosts {
+  graphExactMultiplier: number;
+  callProximityMultiplier: number;
+}
+
 interface NodeReferenceIndex {
   exact: Map<string, Set<string>>;
   token: Map<string, Set<string>>;
@@ -186,8 +202,8 @@ export const FUSION_RANKING_POLICY = {
   },
   fusionBoosts: {
     multiSourceBonusPerAdditionalSource: 0.25,
-    graphExactMultiplier: 1.3,
-    callProximityMultiplier: 1.15
+    graphExactMultiplier: 2,
+    callProximityMultiplier: 1.8
   },
   freshnessPenalties: {
     stale: 0.8,
@@ -260,21 +276,33 @@ export class TopoSemanticQueryEngine {
     const topk = options.topk ?? this.topk;
     const candidateBudget = resolveCandidateBudget(topk, options.candidateBudget);
     const snapshot = this.dependencies.readSnapshot(this.projectPath);
+    const snapshotNodeById = new Map(snapshot.nodes.map((node) => [node.id, node]));
     const contentHashByPath = new Map(snapshot.files.map((file) => [file.path, file.contentHash]));
     const semanticContentByNode = buildQuerySemanticContent(snapshot);
     const freshness = this.dependencies.readFreshness(this.projectPath);
+    const fusionBoosts: QueryFocusBoosts = {
+      graphExactMultiplier: FUSION_RANKING_POLICY.fusionBoosts.graphExactMultiplier,
+      callProximityMultiplier: FUSION_RANKING_POLICY.fusionBoosts.callProximityMultiplier,
+      ...(this.dynamicPolicy?.adjustments.fusionBoostOverrides ?? {})
+    };
+    const queryFocus = buildQueryFocus(snapshot, parsed);
+    const skipSupplementalCandidates = shouldSkipSupplementalCandidates(parsed);
 
     const adjustments = this.dynamicPolicy?.adjustments;
     const graphCandidates = limitCandidateDrafts(
-      this.graphCandidates(snapshot, parsed, semanticContentByNode, contentHashByPath, adjustments),
+      this.graphCandidates(snapshot, parsed, semanticContentByNode, contentHashByPath, adjustments, queryFocus, fusionBoosts),
       candidateBudget.graph
     );
     const vectorCandidates = limitCandidateDrafts(
-      await this.vectorCandidates(parsed, candidateBudget.vector, semanticContentByNode, adjustments),
+      skipSupplementalCandidates
+        ? []
+        : await this.vectorCandidates(snapshotNodeById, parsed, candidateBudget.vector, semanticContentByNode, adjustments, queryFocus, fusionBoosts),
       candidateBudget.vector
     );
     const textCandidates = limitCandidateDrafts(
-      this.textCandidates(snapshot, parsed, semanticContentByNode, contentHashByPath, adjustments),
+      skipSupplementalCandidates
+        ? []
+        : this.textCandidates(snapshot, parsed, semanticContentByNode, contentHashByPath, adjustments, queryFocus, fusionBoosts),
       candidateBudget.text
     );
 
@@ -287,6 +315,7 @@ export class TopoSemanticQueryEngine {
     const rerankLimit = Math.min(mergedNodes.length, Math.max(topk, topk * 2));
     const selectedNodeIds = mergedNodes.slice(0, rerankLimit).map((node) => node.nodeId);
     const documentByNode = mapDocumentsByNode(this.loadStoredDocuments(selectedNodeIds), this.activeEmbedding);
+    const preserveExactRoots = shouldPreserveExactRootAnchors(parsed);
     const rerankedNodes = this.dependencies.relevanceScorer
       ? rerankFusionNodes(
         mergedNodes.slice(0, rerankLimit),
@@ -294,10 +323,12 @@ export class TopoSemanticQueryEngine {
         snapshot,
         documentByNode,
         this.dependencies.relevanceScorer,
-        this.dependencies.relevanceMode ?? 'hybrid'
+        this.dependencies.relevanceMode ?? 'hybrid',
+        queryFocus,
+        preserveExactRoots
       )
       : mergedNodes.slice(0, rerankLimit);
-    const nodes = diversifyBroadHybridResults(rerankedNodes, parsed).slice(0, topk);
+    const nodes = diversifyBroadHybridResults(rerankedNodes, parsed, queryFocus, preserveExactRoots).slice(0, topk);
 
     const documents = nodes
       .map((node) => documentByNode.get(node.nodeId))
@@ -350,7 +381,9 @@ export class TopoSemanticQueryEngine {
     parsed: ParsedFusionQuery,
     contentByNode: ReadonlyMap<string, string>,
     contentHashByPath: ReadonlyMap<string, string>,
-    adjustments?: RankingAdjustments
+    adjustments?: RankingAdjustments,
+    focus?: QueryFocus,
+    fusionBoosts?: QueryFocusBoosts
   ): CandidateDraft[] {
     const terms = queryTerms(parsed.text, parsed.filters);
     const relaxedFilters = shouldRelaxSemanticRankingPathFilters(parsed) ? relaxedSemanticRankingFilters(parsed.filters) : undefined;
@@ -365,6 +398,7 @@ export class TopoSemanticQueryEngine {
       if (score <= 0) {
         continue;
       }
+      const boostedScore = focus && fusionBoosts ? applyQueryFocusBoost(score, node, focus, fusionBoosts) : score;
       candidates.push({
         nodeId: node.id,
         filePath: node.filePath,
@@ -372,7 +406,7 @@ export class TopoSemanticQueryEngine {
         kind: node.kind,
         qualifiedName: node.qualifiedName,
         contentHash: contentHashByPath.get(node.filePath) ?? '',
-        score: applyRouteWeight(score, parsed.route, 'graph', adjustments) * (strictScope || !relaxedFilters ? 1 : RELAXED_SEMANTIC_RANKING_SCOPE_DISCOUNT),
+        score: applyRouteWeight(boostedScore, parsed.route, 'graph', adjustments) * (strictScope || !relaxedFilters ? 1 : RELAXED_SEMANTIC_RANKING_SCOPE_DISCOUNT),
         source: 'graph',
         content
       });
@@ -381,10 +415,13 @@ export class TopoSemanticQueryEngine {
   }
 
   private async vectorCandidates(
+    snapshotNodeById: ReadonlyMap<string, CodeGraphSnapshotNode>,
     parsed: ParsedFusionQuery,
     topk: number,
     contentByNode: ReadonlyMap<string, string>,
-    adjustments?: RankingAdjustments
+    adjustments?: RankingAdjustments,
+    focus?: QueryFocus,
+    fusionBoosts?: QueryFocusBoosts
   ): Promise<CandidateDraft[]> {
     const searchText = parsed.text || parsed.filters.name || parsed.original;
     if (!searchText.trim()) {
@@ -427,6 +464,9 @@ export class TopoSemanticQueryEngine {
       }
       const inStrictScope = resultMatchesFilters(result, parsed.filters);
       const scopeDiscount = inStrictScope || !relaxedFilters ? 1 : RELAXED_SEMANTIC_RANKING_SCOPE_DISCOUNT;
+      const boostedScore = focus && fusionBoosts
+        ? applyQueryFocusBoost(normalizeScore(result.score), snapshotNodeById.get(result.nodeId), focus, fusionBoosts)
+        : normalizeScore(result.score);
       candidates.set(result.nodeId, {
         nodeId: result.nodeId,
         filePath: result.filePath,
@@ -434,7 +474,7 @@ export class TopoSemanticQueryEngine {
         kind: result.kind,
         qualifiedName: result.qualifiedName,
         contentHash: result.contentHash,
-        score: applyRouteWeight(normalizeScore(result.score), parsed.route, 'vector', adjustments) * scopeDiscount,
+        score: applyRouteWeight(boostedScore, parsed.route, 'vector', adjustments) * scopeDiscount,
         source: 'vector' as const,
         content: contentByNode.get(result.nodeId) ?? result.qualifiedName
       });
@@ -455,7 +495,9 @@ export class TopoSemanticQueryEngine {
     parsed: ParsedFusionQuery,
     contentByNode: ReadonlyMap<string, string>,
     contentHashByPath: ReadonlyMap<string, string>,
-    adjustments?: RankingAdjustments
+    adjustments?: RankingAdjustments,
+    focus?: QueryFocus,
+    fusionBoosts?: QueryFocusBoosts
   ): CandidateDraft[] {
     const terms = queryTerms(parsed.text, parsed.filters);
     if (terms.length === 0 && !hasAnyFilter(parsed.filters)) {
@@ -473,6 +515,7 @@ export class TopoSemanticQueryEngine {
       if (score <= 0) {
         continue;
       }
+      const boostedScore = focus && fusionBoosts ? applyQueryFocusBoost(score, node, focus, fusionBoosts) : score;
       drafts.push({
         nodeId: node.id,
         filePath: node.filePath,
@@ -480,7 +523,7 @@ export class TopoSemanticQueryEngine {
         kind: node.kind,
         qualifiedName: node.qualifiedName,
         contentHash: contentHashByPath.get(node.filePath) ?? '',
-        score: applyRouteWeight(score, parsed.route, 'fts', adjustments) * (strictScope || !relaxedFilters ? 1 : RELAXED_SEMANTIC_RANKING_SCOPE_DISCOUNT),
+        score: applyRouteWeight(boostedScore, parsed.route, 'fts', adjustments) * (strictScope || !relaxedFilters ? 1 : RELAXED_SEMANTIC_RANKING_SCOPE_DISCOUNT),
         source: 'fts',
         content
       });
@@ -1032,8 +1075,41 @@ function graphScore(
     overlap = countTermMatches(node.sourceSnippet, terms);
   }
   const nameBoost = filters.name && containsIgnoreCase(node.name, filters.name) ? 0.4 : 0;
+  const pathParts = parsed.text.trim().split(/\s+/).filter((part) => isPathLikeQueryPart(part));
+  const exactSymbolTerms = parsed.text.trim().split(/\s+/).filter((part) => isLikelyExactSymbolQuery(part));
+  const semanticTerms = parsed.text.trim().split(/\s+/).filter((part) => !isPathLikeQueryPart(part) && !isLikelyExactSymbolQuery(part));
+  const exactSymbolBonus = semanticTerms.length > 0
+    ? exactSymbolTerms.reduce((bonus, part, index) => {
+      const normalizedPart = normalizeSearchText(part);
+      const normalizedNodeName = normalizeSearchText(node.name);
+      const normalizedQualifiedName = normalizeSearchText(node.qualifiedName);
+      const normalizedTail = normalizeSearchText(node.qualifiedName.split(/[:.#]/).pop() ?? node.qualifiedName);
+      const positionWeight = exactSymbolTerms.length > 1
+        ? 1 + ((exactSymbolTerms.length - index - 1) / (exactSymbolTerms.length - 1)) * 0.75
+        : 1;
+      if (normalizedNodeName === normalizedPart) {
+        return bonus + ((pathParts.length > 0 ? 80 : 50) * positionWeight);
+      }
+      if (normalizedQualifiedName === normalizedPart || normalizedTail === normalizedPart) {
+        return bonus + ((pathParts.length > 0 ? 60 : 35) * positionWeight);
+      }
+      if (
+        normalizedQualifiedName.includes(`::${normalizedPart}`) ||
+        normalizedQualifiedName.endsWith(normalizedPart)
+      ) {
+        return bonus + ((pathParts.length > 0 ? 30 : 20) * positionWeight);
+      }
+      return bonus;
+    }, 0)
+    : 0;
+  const rootClassBonus = exactSymbolTerms.length === 1 &&
+    semanticTerms.length > 0 &&
+    (node.kind === 'class' || node.kind === 'interface') &&
+    normalizeSearchText(node.name) === normalizeSearchText(exactSymbolTerms[0] ?? '') ?
+    (pathParts.length > 0 ? 20 : 12)
+    : 0;
   const routingBridgeBonus = semanticRoutingBridgeBonus(metadataText, terms, parsed);
-  return overlap === 0 ? nameBoost + routingBridgeBonus : overlap / terms.length + nameBoost + routingBridgeBonus;
+  return overlap === 0 ? nameBoost + exactSymbolBonus + rootClassBonus + routingBridgeBonus : overlap / terms.length + nameBoost + exactSymbolBonus + rootClassBonus + routingBridgeBonus;
 }
 
 function lexicalScore(content: string, terms: readonly string[], parsed: ParsedFusionQuery): number {
@@ -1051,7 +1127,9 @@ function rerankFusionNodes(
   snapshot: CodeGraphSnapshot,
   documentByNode: ReadonlyMap<string, VectorDocument>,
   relevanceScorer: RelevanceScorerAdapter,
-  relevanceMode: RelevanceMode
+  relevanceMode: RelevanceMode,
+  focus?: QueryFocus,
+  preserveExactRoots = false
 ): FusionNode[] {
   if (nodes.length === 0) {
     return [];
@@ -1116,6 +1194,14 @@ function rerankFusionNodes(
       };
     })
     .sort((left, right) => {
+      if (focus && preserveExactRoots) {
+        const leftPriority = focusAnchorPriority(left, snapshotNodeById.get(left.nodeId), focus, preserveExactRoots);
+        const rightPriority = focusAnchorPriority(right, snapshotNodeById.get(right.nodeId), focus, preserveExactRoots);
+        const priorityDelta = rightPriority - leftPriority;
+        if (priorityDelta !== 0) {
+          return priorityDelta;
+        }
+      }
       const scoreDelta = right.score - left.score;
       if (scoreDelta !== 0) {
         return scoreDelta;
@@ -1136,7 +1222,7 @@ function rerankPriorWeight(route: QueryRoute): number {
       return 0.1;
     case 'graph-first':
     case 'graph-first-filter':
-      return 0.25;
+      return route === 'graph-first-filter' ? 0.45 : 0.35;
     case 'hybrid':
       return 0.2;
   }
@@ -1210,7 +1296,12 @@ function mergeCandidates(
   return ranked;
 }
 
-function diversifyBroadHybridResults(nodes: FusionNode[], parsed: ParsedFusionQuery): FusionNode[] {
+function diversifyBroadHybridResults(
+  nodes: FusionNode[],
+  parsed: ParsedFusionQuery,
+  focus?: QueryFocus,
+  preserveExactRoots = false
+): FusionNode[] {
   const terms = queryTerms(parsed.text, parsed.filters);
   if (parsed.route !== 'hybrid' || terms.length < 3 || nodes.length < 2) {
     return nodes;
@@ -1219,6 +1310,39 @@ function diversifyBroadHybridResults(nodes: FusionNode[], parsed: ParsedFusionQu
   const selected: FusionNode[] = [];
   const covered = new Set<string>();
   const maxScore = Math.max(...nodes.map((node) => node.score), 1);
+
+  if (focus?.anchors.length && preserveExactRoots) {
+    const anchoredNodes = nodes
+      .filter((node) => focusAnchorPriority(node, undefined, focus, preserveExactRoots) > 0)
+      .sort((left, right) => {
+        const leftPriority = focusAnchorPriority(left, undefined, focus, preserveExactRoots);
+        const rightPriority = focusAnchorPriority(right, undefined, focus, preserveExactRoots);
+        const priorityDelta = rightPriority - leftPriority;
+        if (priorityDelta !== 0) {
+          return priorityDelta;
+        }
+        const scoreDelta = right.score - left.score;
+        if (scoreDelta !== 0) {
+          return scoreDelta;
+        }
+        return compareFusionNodes(left, right);
+      });
+    for (const anchored of anchoredNodes) {
+      if (remaining.length === 0) {
+        break;
+      }
+      const index = remaining.findIndex((node) => node.nodeId === anchored.nodeId);
+      if (index < 0) {
+        continue;
+      }
+      remaining.splice(index, 1);
+      selected.push(anchored);
+      for (const term of evidenceTerms(anchored, terms)) {
+        covered.add(term);
+      }
+    }
+  }
+
   while (remaining.length > 0) {
     remaining.sort((left, right) => {
       const leftCoverage = uncoveredEvidenceTerms(left, terms, covered).length;
@@ -1243,6 +1367,227 @@ function diversifyBroadHybridResults(nodes: FusionNode[], parsed: ParsedFusionQu
     }
   }
   return selected;
+}
+
+function focusAnchorPriority(
+  node: FusionNode,
+  snapshotNode: CodeGraphSnapshotNode | undefined,
+  focus: QueryFocus,
+  preserveExactRoots: boolean
+): number {
+  if (!preserveExactRoots) {
+    return 0;
+  }
+  const anchor = focus.anchors.find((candidate) => candidate.node.id === node.nodeId || candidate.node.id === snapshotNode?.id);
+  if (!anchor) {
+    return 0;
+  }
+  if (anchor.pathMatched && anchor.exactSymbolMatched) {
+    return 2;
+  }
+  if (anchor.pathMatched || anchor.exactSymbolMatched) {
+    return 1;
+  }
+  return 0;
+}
+
+function buildQueryFocus(snapshot: CodeGraphSnapshot, parsed: ParsedFusionQuery): QueryFocus {
+  const rawParts = parsed.text.trim().split(/\s+/).filter(Boolean);
+  const pathParts = [...new Set([
+    ...rawParts.filter((part) => isPathLikeQueryPart(part)),
+    ...(parsed.filters.file ? [parsed.filters.file] : []),
+    ...(parsed.filters.path ? [parsed.filters.path] : [])
+  ])];
+  const symbolParts = [...new Set([
+    ...(parsed.filters.name ? [parsed.filters.name] : []),
+    ...rawParts.filter((part) => isLikelyExactSymbolQuery(part))
+  ])];
+  if (pathParts.length === 0 && symbolParts.length === 0) {
+    return { anchors: [] };
+  }
+  return {
+    anchors: snapshot.nodes
+      .map((node) => {
+        const pathMatched = pathParts.length > 0 && pathParts.some((part) => nodeMatchesQueryPath(node, part));
+        const symbolMatched = symbolParts.length > 0 && symbolParts.some((part) => nodeMatchesQuerySymbol(node, part));
+        const exactSymbolMatched = symbolParts.length > 0 && symbolParts.some((part) => exactRootSymbolMatch(node, part));
+        if (!pathMatched && !symbolMatched) {
+          return null;
+        }
+        return { node, pathMatched, symbolMatched, exactSymbolMatched };
+      })
+      .filter((anchor): anchor is QueryFocusAnchor => anchor !== null)
+  };
+}
+
+function shouldPreserveExactRootAnchors(parsed: ParsedFusionQuery): boolean {
+  const rawParts = [
+    ...parsed.text.trim().split(/\s+/).filter(Boolean),
+    ...(parsed.filters.file ? [parsed.filters.file] : []),
+    ...(parsed.filters.path ? [parsed.filters.path] : []),
+    ...(parsed.filters.name ? [parsed.filters.name] : [])
+  ];
+  const pathPartCount = rawParts.filter((part) => isPathLikeQueryPart(part)).length;
+  const exactSymbolCount = rawParts.filter((part) => isLikelyExactSymbolQuery(part)).length;
+  return pathPartCount >= 2 || exactSymbolCount >= 3;
+}
+
+function shouldSkipSupplementalCandidates(parsed: ParsedFusionQuery): boolean {
+  const parts = [
+    ...parsed.text.trim().split(/\s+/).filter(Boolean),
+    ...(parsed.filters.file ? [parsed.filters.file] : []),
+    ...(parsed.filters.path ? [parsed.filters.path] : []),
+    ...(parsed.filters.name ? [parsed.filters.name] : [])
+  ];
+  if (parts.length < 2) {
+    return false;
+  }
+  const pathPartCount = parts.filter((part) => isPathLikeQueryPart(part)).length;
+  const exactSymbolCount = parts.filter((part) => isLikelyExactSymbolQuery(part)).length;
+  return pathPartCount >= 2 || exactSymbolCount >= 3;
+}
+
+function applyQueryFocusBoost(
+  score: number,
+  candidate: CodeGraphSnapshotNode | undefined,
+  focus: QueryFocus,
+  fusionBoosts: QueryFocusBoosts
+): number {
+  if (!candidate || focus.anchors.length === 0) {
+    return score;
+  }
+  let boostedScore = score;
+  const exactAnchor = focus.anchors.find((anchor) => anchor.node.id === candidate.id);
+  if (exactAnchor) {
+    const exactAnchorMultiplier = exactAnchor.pathMatched
+      ? (exactAnchor.symbolMatched
+        ? fusionBoosts.graphExactMultiplier * Math.max(1, fusionBoosts.callProximityMultiplier)
+        : fusionBoosts.graphExactMultiplier)
+      : exactAnchor.symbolMatched
+        ? fusionBoosts.callProximityMultiplier
+        : 1;
+    boostedScore *= exactAnchorMultiplier;
+  }
+  const proximityAnchor = focus.anchors.find((anchor) => anchor.node.id !== candidate.id && hasCallProximity(candidate, anchor.node));
+  if (proximityAnchor) {
+    if (exactAnchor) {
+      boostedScore *= Math.sqrt(fusionBoosts.callProximityMultiplier);
+    } else if (proximityAnchor.pathMatched) {
+      boostedScore *= fusionBoosts.callProximityMultiplier;
+    } else if (proximityAnchor.symbolMatched) {
+      boostedScore *= Math.max(1, (fusionBoosts.callProximityMultiplier + 1) / 2);
+    }
+  }
+  if (boostedScore > score) {
+    boostedScore *= memberSpecificityMultiplier(candidate);
+  }
+  const classMemberBoost = classMemberFocusMultiplier(candidate, focus);
+  if (classMemberBoost > 1) {
+    boostedScore *= classMemberBoost;
+  }
+  return boostedScore;
+}
+
+function nodeMatchesQueryPath(node: CodeGraphSnapshotNode, part: string): boolean {
+  const normalizedPart = normalizeSearchText(part);
+  const normalizedFilePath = normalizeSearchText(node.filePath);
+  const normalizedQualifiedName = normalizeSearchText(node.qualifiedName);
+  return normalizedFilePath.includes(normalizedPart) || normalizedQualifiedName.includes(normalizedPart);
+}
+
+function nodeMatchesQuerySymbol(node: CodeGraphSnapshotNode, part: string): boolean {
+  const normalizedPart = normalizeSearchText(part);
+  const normalizedName = normalizeSearchText(node.name);
+  const normalizedQualifiedName = normalizeSearchText(node.qualifiedName);
+  const tail = normalizeSearchText(node.qualifiedName.split(/[:.#]/).pop() ?? node.qualifiedName);
+  return normalizedName.includes(normalizedPart) || normalizedQualifiedName.includes(normalizedPart) || tail.includes(normalizedPart);
+}
+
+function exactRootSymbolMatch(node: CodeGraphSnapshotNode, part: string): boolean {
+  const normalizedPart = normalizeSearchText(part);
+  const normalizedName = normalizeSearchText(node.name);
+  const normalizedQualifiedName = normalizeSearchText(node.qualifiedName);
+  const tail = normalizeSearchText(node.qualifiedName.split(/[:.#]/).pop() ?? node.qualifiedName);
+  return normalizedName === normalizedPart || normalizedQualifiedName === normalizedPart || tail === normalizedPart;
+}
+
+function hasCallProximity(candidate: CodeGraphSnapshotNode, anchor: CodeGraphSnapshotNode): boolean {
+  return candidate.calls.some((call) => referencesQueryNode(call, anchor)) || anchor.calls.some((call) => referencesQueryNode(call, candidate));
+}
+
+function referencesQueryNode(reference: string, node: CodeGraphSnapshotNode): boolean {
+  const normalizedReference = normalizeSearchText(reference);
+  const candidates = new Set([
+    normalizeSearchText(node.name),
+    normalizeSearchText(node.qualifiedName),
+    normalizeSearchText(node.qualifiedName.split(/[:.#]/).pop() ?? node.qualifiedName)
+  ]);
+  for (const candidate of candidates) {
+    if (candidate && normalizedReference.includes(candidate)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isPathLikeQueryPart(part: string): boolean {
+  return /[\\/]/.test(part) || /::/.test(part) || /\.[A-Za-z0-9]{1,8}\b/.test(part);
+}
+
+function memberSpecificityMultiplier(candidate: CodeGraphSnapshotNode): number {
+  const memberDepth = qualifiedNameMemberDepth(candidate.qualifiedName);
+  if (memberDepth <= 0) {
+    return 1;
+  }
+  return 1 + Math.min(1, memberDepth * 0.4);
+}
+
+function classMemberFocusMultiplier(candidate: CodeGraphSnapshotNode, focus: QueryFocus): number {
+  const memberDepth = qualifiedNameMemberDepth(candidate.qualifiedName);
+  if (memberDepth <= 0) {
+    return 1;
+  }
+  const enclosingClass = qualifiedNameEnclosingType(candidate.qualifiedName);
+  if (!enclosingClass) {
+    return 1;
+  }
+  const normalizedEnclosingClass = normalizeSearchText(enclosingClass);
+  const exactClassAnchor = focus.anchors.find((anchor) =>
+    (anchor.node.kind === 'class' || anchor.node.kind === 'interface') &&
+    (anchor.pathMatched || anchor.symbolMatched)
+  );
+  if (exactClassAnchor) {
+    const normalizedAnchorName = normalizeSearchText(exactClassAnchor.node.name);
+    if (normalizedAnchorName.includes(normalizedEnclosingClass) || normalizedEnclosingClass.includes(normalizedAnchorName)) {
+      return 1;
+    }
+  }
+  const matchingClassAnchor = focus.anchors.some((anchor) => {
+    if (anchor.node.id === candidate.id) {
+      return false;
+    }
+    if (anchor.node.kind !== 'class' && anchor.node.kind !== 'interface') {
+      return false;
+    }
+    const normalizedAnchorName = normalizeSearchText(anchor.node.name);
+    return normalizedAnchorName.includes(normalizedEnclosingClass) || normalizedEnclosingClass.includes(normalizedAnchorName);
+  });
+  if (!matchingClassAnchor) {
+    return 1;
+  }
+  return 1 + Math.min(15, memberDepth * 12);
+}
+
+function qualifiedNameMemberDepth(qualifiedName: string): number {
+  return Math.max(0, qualifiedName.split('::').length - 1);
+}
+
+function qualifiedNameEnclosingType(qualifiedName: string): string | undefined {
+  const parts = qualifiedName.split('::').map((part) => part.trim()).filter(Boolean);
+  if (parts.length < 2) {
+    return undefined;
+  }
+  return parts[parts.length - 2];
 }
 
 function selectCompressionStrategy(

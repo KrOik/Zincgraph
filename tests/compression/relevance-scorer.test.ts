@@ -128,6 +128,39 @@ describe('RelevanceScorer embedding mode', () => {
 });
 
 describe('RelevanceScorer hybrid mode', () => {
+  test('exact symbols outrank same-file member noise for anchored hybrid queries', () => {
+    const scorer = createDefaultRelevanceScorer();
+    const documents: TextDocument[] = [
+      {
+        nodeId: 'execute-class',
+        content: 'class ExecuteSqlCommand render validate sql execution',
+        filePath: 'superset/commands/sql_lab/execute.py',
+        qualifiedName: 'ExecuteSqlCommand'
+      },
+      {
+        nodeId: 'execute-init',
+        content: 'def __init__ render validate sql execution',
+        filePath: 'superset/commands/sql_lab/execute.py',
+        qualifiedName: 'ExecuteSqlCommand::__init__'
+      },
+      {
+        nodeId: 'parse-noise',
+        content: 'class RLSAsSubqueryTransformer parse validate',
+        filePath: 'superset/sql/parse.py',
+        qualifiedName: 'RLSAsSubqueryTransformer'
+      }
+    ];
+
+    const results = scorer.score(
+      'superset/commands/sql_lab/execute.py ExecuteSqlCommand render validate',
+      documents,
+      { mode: 'hybrid', exactSymbol: 'ExecuteSqlCommand' }
+    );
+    const sorted = [...results].sort((left, right) => right.score - left.score);
+
+    expect(sorted[0]?.nodeId).toBe('execute-class');
+  });
+
   test('combines BM25 and embedding scores', () => {
     const scorer = createDefaultRelevanceScorer();
     const results = scorer.score('how does authentication work', SAMPLE_DOCUMENTS, { mode: 'hybrid' });

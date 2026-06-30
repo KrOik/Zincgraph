@@ -198,7 +198,7 @@ export class RelevanceScorer implements RelevanceScorerAdapter {
     const pathOverlap = countTermMatches(metadata, queryTerms) / Math.max(1, queryTerms.length);
     const callOverlap = countTermMatches(callTargets, queryTerms) / Math.max(1, queryTerms.length);
     const exactSymbolBoost = querySymbol && (qualifiedTail === querySymbol || qualifiedName === querySymbol) ? 1 : 0;
-    return clamp01(pathOverlap * 0.55 + callOverlap * 0.2 + exactSymbolBoost * 0.45);
+    return clamp01(pathOverlap * 0.55 + callOverlap * 0.2 + exactSymbolBoost * 1);
   }
 }
 

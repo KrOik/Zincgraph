@@ -35,6 +35,11 @@ export function runPoolBenchmark(options?: PoolBenchmarkOptions): Promise<{
   report: string;
   resultDir: string;
 }>;
+export function runPoolComparison(options?: PoolBenchmarkOptions): Promise<{
+  summary: Record<string, any>;
+  report: string;
+  resultDir: string;
+}>;
 
 export function evaluateRepo(repo: Record<string, any>, cases: Array<Record<string, any>>, repoPath: string, runs: number): Record<string, any>;
 export function evaluateCase(repo: Record<string, any>, caseSpec: Record<string, any>, repoPath: string, runs?: number): Record<string, any>;
@@ -42,6 +47,7 @@ export function evaluateCaseAsync(repo: Record<string, any>, caseSpec: Record<st
 export function summarizeRepoFromCaseResults(repo: Record<string, any>, caseResults: Array<Record<string, any>>): Record<string, any>;
 export function runCaseQuery(repoPath: string, query: string, topk: number, runs: number): Record<string, any>;
 export function runCaseQueryAsync(repoPath: string, query: string, topk: number, runs: number): Promise<Record<string, any>>;
+export function buildArmQueryCommand(arm: string, repoPath: string, query: string, topk: number): string[];
 export function resolveImportTargets(sourceFilePath: string, specifier: string, nodes: Array<Record<string, any>>): string[];
 export function validatePoolAgainstFixtures(
   pool: PoolContract,
@@ -51,6 +57,7 @@ export function validatePoolAgainstFixtures(
 ): {
   ok: boolean;
   errors: string[];
+  warnings: string[];
   expectedCounts: Record<string, number>;
   fixtureCounts: Record<string, number>;
 };

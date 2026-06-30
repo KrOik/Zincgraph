@@ -110,11 +110,17 @@ const ISOLATED_SAME_FILE_BONUS = 0.2;
 const GRAPH_RELATION_BONUS = 0.3;
 const TOKEN_OVERLAP_THRESHOLD = 0.18;
 export function buildNodeText(node: CodeGraphSnapshotNode): string {
+  const normalizedPath = tokenizeCodeText(node.filePath).join(' ');
+  const normalizedQualifiedName = tokenizeCodeText(node.qualifiedName).join(' ');
+  const normalizedName = tokenizeCodeText(node.name).join(' ');
   return [
     `path ${node.filePath}`,
+    normalizedPath ? `normalized path ${normalizedPath}` : '',
     `kind ${node.kind}`,
     `language ${node.language}`,
     `qualified ${node.qualifiedName}`,
+    normalizedQualifiedName ? `normalized qualified ${normalizedQualifiedName}` : '',
+    normalizedName ? `normalized name ${normalizedName}` : '',
     node.signature || node.qualifiedName || node.name,
     node.docstring ?? '',
     node.sourceSnippet ? `source\n${node.sourceSnippet}` : '',

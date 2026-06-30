@@ -7,6 +7,7 @@ import { describe, expect, test, vi } from 'vitest';
 import { FUSION_RANKING_POLICY, TopoSemanticQueryEngine, compareFusionNodes, routeWeight, zvecFilterFor } from '../../src/fusion/query-engine.js';
 import type { FusionNode } from '../../src/fusion/query-engine.js';
 import type { FusionCompressionAdapter } from '../../src/compression/fusion-compressor.js';
+import type { RelevanceScorerAdapter } from '../../src/compression/relevance-scorer.js';
 import type { FreshnessSnapshot } from '../../src/freshness/freshness-gate.js';
 import { FusionStore } from '../../src/freshness/fusion-store.js';
 import type { CodeGraphSnapshot } from '../../src/vector/code-to-vectors.js';
@@ -163,6 +164,36 @@ function seedStoredDocuments(projectPath: string): void {
   }
 }
 
+function neutralRelevanceScorer() {
+  return {
+    score: (_query: string, documents: readonly { nodeId: string }[]) =>
+      documents.map((document) => ({
+        nodeId: document.nodeId,
+        score: 0.5,
+        bm25Score: 0,
+        embeddingScore: 0,
+        lexicalScore: 0,
+        semanticScore: 0,
+        structureScore: 0,
+        freshnessScore: 0,
+        matchedTerms: [],
+        rankFeatures: {
+          lexical: 0,
+          semantic: 0,
+          structure: 0,
+          freshness: 0,
+          final: 0.5
+        },
+        rankWeights: {
+          lexical: 1,
+          semantic: 1,
+          structure: 1,
+          freshness: 1
+        }
+      }))
+  };
+}
+
 describe('Phase 2 TopoSemanticQueryEngine', () => {
   test('returns graph, vector, and fts evidence for token validation', async () => {
     const capsule = await engine().query('token validation', { topk: 5 });
@@ -283,6 +314,81 @@ describe('Phase 2 TopoSemanticQueryEngine', () => {
     expect(receivedVectorText).toContain('query');
     expect(receivedVectorText).toContain('router');
     expect(receivedVectorMode).toBe('hybrid');
+  });
+
+  test('explicit anchor bundle queries still consult vector search for supplemental evidence', async () => {
+    let vectorSearchCalls = 0;
+    const bundleEngine = new TopoSemanticQueryEngine('/tmp/project', {
+      dependencies: {
+        readSnapshot: () => snapshot,
+        vectorSearch: async () => {
+          vectorSearchCalls += 1;
+          return vectorResults;
+        },
+        listVectorDocuments: () => storedDocuments,
+        readFreshness: () => freshness()
+      }
+    });
+
+    await bundleEngine.query('src/auth.ts TokenService', { topk: 5 });
+    expect(vectorSearchCalls).toBeGreaterThan(0);
+  });
+
+  test('exact symbol graph-first queries prefer the root definition over same-file member noise', async () => {
+    const exactSnapshot: CodeGraphSnapshot = {
+      projectPath: '/tmp/project',
+      files: [
+        { path: 'superset/commands/sql_lab/execute.py', contentHash: 'execute-hash', language: 'python' },
+        { path: 'superset/sql/parse.py', contentHash: 'parse-hash', language: 'python' }
+      ],
+      nodes: [
+        {
+          id: 'execute-class',
+          kind: 'class',
+          name: 'ExecuteSqlCommand',
+          qualifiedName: 'superset/commands/sql_lab/execute.py::ExecuteSqlCommand',
+          filePath: 'superset/commands/sql_lab/execute.py',
+          language: 'python',
+          signature: 'class ExecuteSqlCommand',
+          docstring: 'render validate sql command',
+          calls: []
+        },
+        {
+          id: 'execute-init',
+          kind: 'method',
+          name: '__init__',
+          qualifiedName: 'superset/commands/sql_lab/execute.py::ExecuteSqlCommand::__init__',
+          filePath: 'superset/commands/sql_lab/execute.py',
+          language: 'python',
+          signature: 'def __init__(...)',
+          docstring: 'render validate sql command helper',
+          calls: []
+        },
+        {
+          id: 'parse-noise',
+          kind: 'class',
+          name: 'RLSAsSubqueryTransformer',
+          qualifiedName: 'superset/sql/parse.py::RLSAsSubqueryTransformer',
+          filePath: 'superset/sql/parse.py',
+          language: 'python',
+          signature: 'class RLSAsSubqueryTransformer',
+          docstring: 'validate noise',
+          calls: []
+        }
+      ]
+    };
+    const exactEngine = new TopoSemanticQueryEngine('/tmp/project', {
+      dependencies: {
+        readSnapshot: () => exactSnapshot,
+        vectorSearch: async () => [],
+        listVectorDocuments: () => [],
+        readFreshness: () => freshness()
+      }
+    });
+
+    const capsule = await exactEngine.query('superset/commands/sql_lab/execute.py ExecuteSqlCommand render validate', { topk: 3 });
+    expect(capsule.nodes[0]?.nodeId).toBe('execute-class');
+    expect(capsule.nodes.map((node) => node.nodeId)).toContain('execute-class');
   });
 
   test('semantic-ranking queries with path filters can bridge to out-of-path router code', async () => {
@@ -710,6 +816,363 @@ describe('Phase 2 TopoSemanticQueryEngine', () => {
     expect(capsule.nodes[0]?.nodeId).toBe('node-graph-exact');
   });
 
+  test('exact class anchors stay ahead of same-class member noise when the class is named', async () => {
+    const classSnapshot: CodeGraphSnapshot = {
+      projectPath: '/tmp/project',
+      files: [{ path: 'superset/commands/sql_lab/execute.py', contentHash: 'hash-execute', language: 'python' }],
+      nodes: [
+        {
+          id: 'node-class',
+          kind: 'class',
+          name: 'ExecuteSqlCommand',
+          qualifiedName: 'superset/commands/sql_lab/execute.py::ExecuteSqlCommand',
+          filePath: 'superset/commands/sql_lab/execute.py',
+          language: 'python',
+          signature: 'class ExecuteSqlCommand',
+          docstring: 'wires SQL execution.',
+          calls: ['ExecuteSqlCommand::__init__']
+        },
+        {
+          id: 'node-member',
+          kind: 'method',
+          name: '__init__',
+          qualifiedName: 'superset/commands/sql_lab/execute.py::ExecuteSqlCommand::__init__',
+          filePath: 'superset/commands/sql_lab/execute.py',
+          language: 'python',
+          signature: 'def __init__(self, execution_context, query_dao)',
+          docstring: 'initializes the command wiring.',
+          calls: []
+        }
+      ]
+    };
+    const classEngine = new TopoSemanticQueryEngine('/tmp/project', {
+      dependencies: {
+        readSnapshot: () => classSnapshot,
+        vectorSearch: async () => [],
+        listVectorDocuments: () => [],
+        readFreshness: () => freshness({ entries: [], fresh: 0, total: 0 }),
+        relevanceScorer: neutralRelevanceScorer()
+      }
+    });
+
+    const capsule = await classEngine.query('superset/commands/sql_lab/execute.py ExecuteSqlCommand validate', { topk: 2 });
+    expect(capsule.route).toBe('graph-first-filter');
+    expect(capsule.nodes[0]?.nodeId).toBe('node-class');
+    expect(capsule.nodes.map((node) => node.nodeId)).toContain('node-member');
+  });
+
+  test('exact anchors survive rerank even when a relevance scorer prefers same-file member noise', async () => {
+    const classSnapshot: CodeGraphSnapshot = {
+      projectPath: '/tmp/project',
+      files: [
+        { path: 'superset/commands/sql_lab/execute.py', contentHash: 'hash-execute', language: 'python' },
+        { path: 'superset/sql/parse.py', contentHash: 'hash-parse', language: 'python' }
+      ],
+      nodes: [
+        {
+          id: 'node-class',
+          kind: 'class',
+          name: 'ExecuteSqlCommand',
+          qualifiedName: 'superset/commands/sql_lab/execute.py::ExecuteSqlCommand',
+          filePath: 'superset/commands/sql_lab/execute.py',
+          language: 'python',
+          signature: 'class ExecuteSqlCommand',
+          docstring: 'wires SQL execution.',
+          calls: ['ExecuteSqlCommand::__init__']
+        },
+        {
+          id: 'node-member',
+          kind: 'method',
+          name: '__init__',
+          qualifiedName: 'superset/commands/sql_lab/execute.py::ExecuteSqlCommand::__init__',
+          filePath: 'superset/commands/sql_lab/execute.py',
+          language: 'python',
+          signature: 'def __init__(self, execution_context, query_dao)',
+          docstring: 'render validate query render validate query render validate query.',
+          calls: ['SqlQueryRenderException']
+        },
+        {
+          id: 'node-noise',
+          kind: 'class',
+          name: 'RLSAsSubqueryTransformer',
+          qualifiedName: 'superset/sql/parse.py::RLSAsSubqueryTransformer',
+          filePath: 'superset/sql/parse.py',
+          language: 'python',
+          signature: 'class RLSAsSubqueryTransformer',
+          docstring: 'render validate path noise',
+          calls: []
+        }
+      ]
+    };
+    const biasedRelevanceScorer: RelevanceScorerAdapter = {
+      score: (_query, documents) =>
+        documents.map((document) => {
+          const score = document.nodeId === 'node-member'
+            ? 0.99
+            : document.nodeId === 'node-noise'
+              ? 0.61
+              : 0.05;
+          return {
+            nodeId: document.nodeId,
+            score,
+            bm25Score: 0,
+            embeddingScore: 0,
+            lexicalScore: 0,
+            semanticScore: 0,
+            structureScore: 0,
+            freshnessScore: 0,
+            matchedTerms: [],
+            rankFeatures: {
+              lexical: 0,
+              semantic: 0,
+              structure: 0,
+              freshness: 0,
+              final: score
+            },
+            rankWeights: {
+              lexical: 1,
+              semantic: 1,
+              structure: 1,
+              freshness: 1
+            }
+          };
+        })
+    };
+    const classEngine = new TopoSemanticQueryEngine('/tmp/project', {
+      dependencies: {
+        readSnapshot: () => classSnapshot,
+        vectorSearch: async () => [],
+        listVectorDocuments: () => [],
+        readFreshness: () => freshness({ entries: [], fresh: 0, total: 0 }),
+        relevanceScorer: biasedRelevanceScorer
+      }
+    });
+
+    const capsule = await classEngine.query(
+      'superset/commands/sql_lab/execute.py superset/sql/parse.py ExecuteSqlCommand SqlQueryRenderImpl SqlQueryRenderException render validate',
+      { topk: 3 }
+    );
+
+    expect(capsule.nodes[0]?.nodeId).toBe('node-class');
+    expect(capsule.nodes.map((node) => node.nodeId)).toContain('node-member');
+  });
+
+  test('noisy multi-file bundles still surface exact file symbols within the top results', async () => {
+    const bundleSnapshot: CodeGraphSnapshot = {
+      projectPath: '/tmp/project',
+      files: [
+        { path: 'airflow-core/src/airflow/api_fastapi/core_api/routes/ui/structure.py', contentHash: 'hash-route', language: 'python' },
+        { path: 'airflow-core/src/airflow/api_fastapi/core_api/services/ui/structure.py', contentHash: 'hash-service', language: 'python' },
+        { path: 'airflow-core/src/airflow/api_fastapi/core_api/datamodels/ui/structure.py', contentHash: 'hash-model', language: 'python' }
+      ],
+      nodes: [
+        {
+          id: 'structure-data',
+          kind: 'function',
+          name: 'structure_data',
+          qualifiedName: 'airflow-core/src/airflow/api_fastapi/core_api/routes/ui/structure.py::structure_data',
+          filePath: 'airflow-core/src/airflow/api_fastapi/core_api/routes/ui/structure.py',
+          language: 'python',
+          signature: 'def structure_data() -> StructureDataResponse',
+          docstring: 'structure data structure data bind output assets tasks get dag structure validate upstream downstream',
+          sourceSnippet: 'def structure_data(): return get_upstream_assets()',
+          calls: ['get_upstream_assets']
+        },
+        {
+          id: 'bind-output-assets',
+          kind: 'function',
+          name: 'bind_output_assets_to_tasks',
+          qualifiedName: 'airflow-core/src/airflow/api_fastapi/core_api/services/ui/structure.py::bind_output_assets_to_tasks',
+          filePath: 'airflow-core/src/airflow/api_fastapi/core_api/services/ui/structure.py',
+          language: 'python',
+          signature: 'def bind_output_assets_to_tasks() -> None',
+          docstring: 'bind output assets to tasks structure data get dag structure validate upstream downstream',
+          sourceSnippet: 'def bind_output_assets_to_tasks(): return None',
+          calls: []
+        },
+        {
+          id: 'get-dag-structure',
+          kind: 'function',
+          name: 'get_dag_structure',
+          qualifiedName: 'airflow-core/src/airflow/api_fastapi/core_api/services/ui/structure.py::get_dag_structure',
+          filePath: 'airflow-core/src/airflow/api_fastapi/core_api/services/ui/structure.py',
+          language: 'python',
+          signature: 'def get_dag_structure() -> dict',
+          docstring: 'get dag structure structure data bind output assets validate upstream downstream',
+          sourceSnippet: 'def get_dag_structure(): return {}',
+          calls: []
+        },
+        {
+          id: 'structure-response',
+          kind: 'class',
+          name: 'StructureDataResponse',
+          qualifiedName: 'airflow-core/src/airflow/api_fastapi/core_api/datamodels/ui/structure.py::StructureDataResponse',
+          filePath: 'airflow-core/src/airflow/api_fastapi/core_api/datamodels/ui/structure.py',
+          language: 'python',
+          signature: 'class StructureDataResponse',
+          docstring: 'StructureDataResponse NodeResponse EdgeResponse structure data',
+          sourceSnippet: 'class StructureDataResponse: ...',
+          calls: []
+        },
+        {
+          id: 'get-upstream-assets',
+          kind: 'function',
+          name: 'get_upstream_assets',
+          qualifiedName: 'airflow-core/src/airflow/api_fastapi/core_api/services/ui/structure.py::get_upstream_assets',
+          filePath: 'airflow-core/src/airflow/api_fastapi/core_api/services/ui/structure.py',
+          language: 'python',
+          signature: 'def get_upstream_assets(asset_expression, entry_node_ref, level=0) -> tuple[list[dict], list[dict]]',
+          docstring: 'get upstream assets',
+          sourceSnippet: 'def get_upstream_assets(asset_expression, entry_node_ref, level=0): return [], []',
+          calls: []
+        }
+      ]
+    };
+    const bundleEngine = new TopoSemanticQueryEngine('/tmp/project', {
+      dependencies: {
+        readSnapshot: () => bundleSnapshot,
+        vectorSearch: async () => [],
+        listVectorDocuments: () => [],
+        readFreshness: () => freshness({ entries: [], fresh: 0, total: 0 }),
+        relevanceScorer: neutralRelevanceScorer()
+      }
+    });
+
+    const capsule = await bundleEngine.query(
+      'airflow-core/src/airflow/api_fastapi/core_api/routes/ui/structure.py airflow-core/src/airflow/api_fastapi/core_api/services/ui/structure.py airflow-core/src/airflow/api_fastapi/core_api/datamodels/ui/structure.py StructureDataResponse bind_output_assets_to_tasks get_upstream_assets get_dag_structure structure_data',
+      { topk: 3 }
+    );
+
+    expect(capsule.route).toBe('graph-first');
+    expect(capsule.nodes.slice(0, 3).map((node) => node.nodeId)).toContain('get-upstream-assets');
+  });
+
+  test('graphExactMultiplier keeps exact path anchors ahead of same-query noise after rerank', async () => {
+    const pathSnapshot: CodeGraphSnapshot = {
+      projectPath: '/tmp/project',
+      files: [
+        { path: 'src/airflow/api_fastapi/core_api/services/public/dag_run.py', contentHash: 'path-exact', language: 'python' },
+        { path: 'src/airflow/api_fastapi/core_api/services/public/dag_run_helpers.py', contentHash: 'path-noise', language: 'python' }
+      ],
+      nodes: [
+        {
+          id: 'path-exact',
+          kind: 'function',
+          name: 'perform_clear_dag_run',
+          qualifiedName: 'src/airflow/api_fastapi/core_api/services/public/dag_run.py::perform_clear_dag_run',
+          filePath: 'src/airflow/api_fastapi/core_api/services/public/dag_run.py',
+          language: 'python',
+          signature: 'def perform_clear_dag_run() -> None',
+          docstring: 'Clear dag runs.',
+          calls: ['bulk_clear_dag_run_body']
+        },
+        {
+          id: 'path-noise',
+          kind: 'function',
+          name: 'perform_clear_dag_run_helper',
+          qualifiedName: 'src/airflow/api_fastapi/core_api/services/public/dag_run_helpers.py::perform_clear_dag_run_helper',
+          filePath: 'src/airflow/api_fastapi/core_api/services/public/dag_run_helpers.py',
+          language: 'python',
+          signature: 'def perform_clear_dag_run_helper() -> None',
+          docstring: 'perform clear dag run helper perform clear dag run helper perform clear dag run helper',
+          calls: ['perform_clear_dag_run']
+        }
+      ]
+    };
+    const pathEngine = new TopoSemanticQueryEngine('/tmp/project', {
+      dependencies: {
+        readSnapshot: () => pathSnapshot,
+        vectorSearch: async () => [],
+        listVectorDocuments: () => [],
+        readFreshness: () => freshness({ entries: [], fresh: 0, total: 0 }),
+        relevanceScorer: neutralRelevanceScorer()
+      }
+    });
+    pathEngine.setDynamicPolicy({
+      base: FUSION_RANKING_POLICY,
+      adjustments: {
+        fusionBoostOverrides: {
+          graphExactMultiplier: 8
+        }
+      }
+    });
+
+    const capsule = await pathEngine.query('src/airflow/api_fastapi/core_api/services/public/dag_run.py perform_clear_dag_run', { topk: 2 });
+    expect(capsule.route).toBe('graph-first-filter');
+    expect(capsule.nodes[0]?.nodeId).toBe('path-exact');
+    expect(capsule.nodes[1]?.nodeId).toBe('path-noise');
+  });
+
+  test('callProximityMultiplier keeps direct neighbors ahead of unrelated distractors after rerank', async () => {
+    const proximitySnapshot: CodeGraphSnapshot = {
+      projectPath: '/tmp/project',
+      files: [
+        { path: 'src/airflow/api_fastapi/core_api/services/public/dag_run.py', contentHash: 'path-exact', language: 'python' },
+        { path: 'src/airflow/api_fastapi/core_api/services/public/dag_run_helpers.py', contentHash: 'path-noise', language: 'python' },
+        { path: 'src/airflow/api_fastapi/core_api/services/public/dag_run_body.py', contentHash: 'path-distractor', language: 'python' }
+      ],
+      nodes: [
+        {
+          id: 'path-exact',
+          kind: 'function',
+          name: 'perform_clear_dag_run',
+          qualifiedName: 'src/airflow/api_fastapi/core_api/services/public/dag_run.py::perform_clear_dag_run',
+          filePath: 'src/airflow/api_fastapi/core_api/services/public/dag_run.py',
+          language: 'python',
+          signature: 'def perform_clear_dag_run() -> None',
+          docstring: 'Clear dag runs.',
+          calls: ['bulk_clear_dag_run_body']
+        },
+        {
+          id: 'path-noise',
+          kind: 'function',
+          name: 'build_bulk_dag_run_body',
+          qualifiedName: 'src/airflow/api_fastapi/core_api/services/public/dag_run_helpers.py::build_bulk_dag_run_body',
+          filePath: 'src/airflow/api_fastapi/core_api/services/public/dag_run_helpers.py',
+          language: 'python',
+          signature: 'def build_bulk_dag_run_body() -> None',
+          docstring: 'perform clear dag run helper perform clear dag run helper perform clear dag run helper',
+          calls: ['perform_clear_dag_run']
+        },
+        {
+          id: 'path-distractor',
+          kind: 'function',
+          name: 'build_bulk_dag_run_body',
+          qualifiedName: 'src/airflow/api_fastapi/core_api/services/public/dag_run_body.py::build_bulk_dag_run_body',
+          filePath: 'src/airflow/api_fastapi/core_api/services/public/dag_run_body.py',
+          language: 'python',
+          signature: 'def build_bulk_dag_run_body() -> None',
+          docstring: 'perform clear dag run helper perform clear dag run helper perform clear dag run helper',
+          calls: []
+        }
+      ]
+    };
+    const proximityEngine = new TopoSemanticQueryEngine('/tmp/project', {
+      dependencies: {
+        readSnapshot: () => proximitySnapshot,
+        vectorSearch: async () => [],
+        listVectorDocuments: () => [],
+        readFreshness: () => freshness({ entries: [], fresh: 0, total: 0 }),
+        relevanceScorer: neutralRelevanceScorer()
+      }
+    });
+    proximityEngine.setDynamicPolicy({
+      base: FUSION_RANKING_POLICY,
+      adjustments: {
+        fusionBoostOverrides: {
+          callProximityMultiplier: 3
+        }
+      }
+    });
+
+    const capsule = await proximityEngine.query('src/airflow/api_fastapi/core_api/services/public/dag_run.py perform_clear_dag_run', { topk: 3 });
+    const ids = capsule.nodes.map((node) => node.nodeId);
+    expect(ids).toContain('path-exact');
+    expect(ids.indexOf('path-noise')).toBeGreaterThan(-1);
+    expect(ids.indexOf('path-distractor')).toBeGreaterThan(-1);
+    expect(ids.indexOf('path-noise')).toBeLessThan(ids.indexOf('path-distractor'));
+  });
+
   test('graph-first-filter route preserves path-constrained results', async () => {
     const capsule = await engine().query('path:src/auth token validation', { topk: 5 });
     expect(capsule.route).toBe('graph-first-filter');
@@ -970,6 +1433,202 @@ describe('Phase 2 TopoSemanticQueryEngine', () => {
     expect(capsule.nodes[0]?.nodeId).toBe('exact');
   });
 
+  test('explicit anchor bundles still consult vector search and keep graph evidence first', async () => {
+    let vectorCalls = 0;
+    const anchorEngine = new TopoSemanticQueryEngine('/tmp/project', {
+      dependencies: {
+        readSnapshot: () => snapshot,
+        vectorSearch: async () => {
+          vectorCalls += 1;
+          return vectorResults;
+        },
+        listVectorDocuments: () => storedDocuments,
+        readFreshness: () => freshness({ entries: [], fresh: 0, total: 0 }),
+        relevanceScorer: neutralRelevanceScorer()
+      }
+    });
+
+    const capsule = await anchorEngine.query('src/token-service.ts TokenService', { topk: 2 });
+
+    expect(vectorCalls).toBeGreaterThan(0);
+    expect(capsule.nodes[0]?.nodeId).toBe('node-class');
+  });
+
+  test('anchor-dense mixed bundles still consult vector search and keep graph evidence first', async () => {
+    let vectorCalls = 0;
+    const mixedSnapshot: CodeGraphSnapshot = {
+      projectPath: '/tmp/project',
+      files: [
+        { path: 'airbyte-integrations/connectors/source-twilio/components.py', contentHash: 'twilio-components', language: 'python' },
+        { path: 'airbyte-integrations/connectors/source-twilio/unit_tests/test_streams.py', contentHash: 'twilio-streams', language: 'python' },
+        { path: 'airbyte-integrations/connectors/source-twilio/unit_tests/test_usage_records_404_handling.py', contentHash: 'twilio-usage-tests', language: 'python' }
+      ],
+      nodes: [
+        {
+          id: 'twilio-components',
+          kind: 'class',
+          name: 'TwilioUsageRecordsStateMigration',
+          qualifiedName: 'airbyte-integrations/connectors/source-twilio/components.py::TwilioUsageRecordsStateMigration',
+          filePath: 'airbyte-integrations/connectors/source-twilio/components.py',
+          language: 'python',
+          signature: 'class TwilioUsageRecordsStateMigration',
+          docstring: 'State migration logic for usage records.',
+          calls: ['TwilioStateMigration']
+        },
+        {
+          id: 'twilio-streams',
+          kind: 'class',
+          name: 'TestIncrementalTwilioStream',
+          qualifiedName: 'airbyte-integrations/connectors/source-twilio/unit_tests/test_streams.py::TestIncrementalTwilioStream',
+          filePath: 'airbyte-integrations/connectors/source-twilio/unit_tests/test_streams.py',
+          language: 'python',
+          signature: 'class TestIncrementalTwilioStream',
+          docstring: 'test_streams coverage for usage records.',
+          calls: ['TwilioUsageRecordsStateMigration']
+        },
+        {
+          id: 'twilio-404',
+          kind: 'class',
+          name: 'TestUsageRecords404Handling',
+          qualifiedName: 'airbyte-integrations/connectors/source-twilio/unit_tests/test_usage_records_404_handling.py::TestUsageRecords404Handling',
+          filePath: 'airbyte-integrations/connectors/source-twilio/unit_tests/test_usage_records_404_handling.py',
+          language: 'python',
+          signature: 'class TestUsageRecords404Handling',
+          docstring: 'usage_records 404 handling coverage.',
+          calls: ['TwilioUsageRecordsStateMigration']
+        }
+      ]
+    };
+    const mixedEngine = new TopoSemanticQueryEngine('/tmp/project', {
+      dependencies: {
+        readSnapshot: () => mixedSnapshot,
+        vectorSearch: async () => {
+          vectorCalls += 1;
+          return vectorResults;
+        },
+        listVectorDocuments: () => storedDocuments,
+        readFreshness: () => freshness({ entries: [], fresh: 0, total: 0 }),
+        relevanceScorer: neutralRelevanceScorer()
+      }
+    });
+
+    const capsule = await mixedEngine.query('TwilioUsageRecordsStateMigration usage_records test_usage_records_404_handling test_streams TwilioStateMigration', { topk: 3 });
+
+    expect(vectorCalls).toBe(0);
+    expect(capsule.route).toBe('graph-first');
+    expect(capsule.nodes[0]?.nodeId).toBe('twilio-components');
+    expect(capsule.nodes.map((node) => node.nodeId)).toEqual(expect.arrayContaining(['twilio-404', 'twilio-streams']));
+  });
+
+  test('path-and-symbol bundles prioritize nested member nodes over enclosing classes', async () => {
+    const nestedSnapshot: CodeGraphSnapshot = {
+      projectPath: '/tmp/project',
+      files: [
+        {
+          path: 'superset/security/guest_token.py',
+          contentHash: 'hash-guest',
+          language: 'python'
+        }
+      ],
+      nodes: [
+        {
+          id: 'guest-class',
+          kind: 'class',
+          name: 'GuestUser',
+          qualifiedName: 'superset/security/guest_token.py::GuestUser',
+          filePath: 'superset/security/guest_token.py',
+          language: 'python',
+          signature: 'class GuestUser',
+          docstring: 'Guest user container.',
+          calls: []
+        },
+        {
+          id: 'guest-init',
+          kind: 'method',
+          name: '__init__',
+          qualifiedName: 'superset/security/guest_token.py::GuestUser::__init__',
+          filePath: 'superset/security/guest_token.py',
+          language: 'python',
+          signature: 'def __init__(self, user_id: int) -> None',
+          docstring: 'Initializes the guest user container.',
+          calls: []
+        },
+        {
+          id: 'guest-audit',
+          kind: 'function',
+          name: 'build_guest_token_audit_payload',
+          qualifiedName: 'superset/security/guest_token.py::build_guest_token_audit_payload',
+          filePath: 'superset/security/guest_token.py',
+          language: 'python',
+          signature: 'def build_guest_token_audit_payload(user_id: int) -> dict[str, unknown]',
+          docstring: 'Builds guest token audit payloads.',
+          calls: []
+        }
+      ]
+    };
+    const nestedEngine = new TopoSemanticQueryEngine('/tmp/project', {
+      dependencies: {
+        readSnapshot: () => nestedSnapshot,
+        vectorSearch: async () => [],
+        listVectorDocuments: () => [],
+        readFreshness: () => freshness({ entries: [], fresh: 0, pending: 0, stale: 0, failed: 0, total: 0 })
+      }
+    });
+
+    const capsule = await nestedEngine.query('superset/security/guest_token.py GuestUser build_guest_token_audit_payload', { topk: 2 });
+
+    expect(capsule.nodes.map((node) => node.nodeId)).toEqual(['guest-init', 'guest-audit']);
+  });
+
+  test('path-and-symbol bundles also prioritize class-qualified members over enclosing classes', async () => {
+    const nestedSnapshot: CodeGraphSnapshot = {
+      projectPath: '/tmp/project',
+      files: [
+        {
+          path: 'superset/security/guest_token.py',
+          contentHash: 'hash-guest',
+          language: 'python'
+        }
+      ],
+      nodes: [
+        {
+          id: 'guest-class',
+          kind: 'class',
+          name: 'GuestUser',
+          qualifiedName: 'GuestUser',
+          filePath: 'superset/security/guest_token.py',
+          language: 'python',
+          signature: 'class GuestUser',
+          docstring: 'Guest user container.',
+          calls: []
+        },
+        {
+          id: 'guest-init',
+          kind: 'method',
+          name: '__init__',
+          qualifiedName: 'GuestUser::__init__',
+          filePath: 'superset/security/guest_token.py',
+          language: 'python',
+          signature: 'def __init__(self, user_id: int) -> None',
+          docstring: 'Initializes the guest user container.',
+          calls: []
+        }
+      ]
+    };
+    const nestedEngine = new TopoSemanticQueryEngine('/tmp/project', {
+      dependencies: {
+        readSnapshot: () => nestedSnapshot,
+        vectorSearch: async () => [],
+        listVectorDocuments: () => [],
+        readFreshness: () => freshness({ entries: [], fresh: 0, pending: 0, stale: 0, failed: 0, total: 0 })
+      }
+    });
+
+    const capsule = await nestedEngine.query('superset/security/guest_token.py GuestUser', { topk: 1 });
+
+    expect(capsule.nodes.map((node) => node.nodeId)).toEqual(['guest-init']);
+  });
+
   test('hybrid route has neutral branch weights', () => {
     expect(routeWeight('hybrid', 'graph')).toBe(1);
     expect(routeWeight('hybrid', 'vector')).toBe(1);
@@ -986,8 +1645,8 @@ describe('Phase 2 TopoSemanticQueryEngine', () => {
     expect(FUSION_RANKING_POLICY.routeWeights.hybrid.graph).toBe(1);
     expect(FUSION_RANKING_POLICY.fusionBoosts).toMatchObject({
       multiSourceBonusPerAdditionalSource: 0.25,
-      graphExactMultiplier: 1.3,
-      callProximityMultiplier: 1.15
+      graphExactMultiplier: 2,
+      callProximityMultiplier: 1.8
     });
     expect(FUSION_RANKING_POLICY.freshnessPenalties).toMatchObject({ stale: 0.8, nonFresh: 0.7 });
     expect(FUSION_RANKING_POLICY.tieBreakers).toEqual([

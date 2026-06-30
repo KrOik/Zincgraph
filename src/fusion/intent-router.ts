@@ -148,6 +148,25 @@ export function queryTerms(text: string, filters: ScalarFilters = {}): string[] 
   return expandSemanticQueryTokens(seed);
 }
 
+export function isExactSymbolBundleQuery(text: string): boolean {
+  const parts = text.trim().split(/\s+/).filter(Boolean);
+  return parts.length >= 2 && parts.every((part) => isLikelyExactSymbolQuery(part));
+}
+
+function isPathLikeQueryPart(part: string): boolean {
+  return /[\\/]/.test(part) || /::/.test(part) || /\.[A-Za-z0-9]{1,8}\b/.test(part);
+}
+
+function isAnchorDenseBundleQuery(text: string): boolean {
+  const parts = text.trim().split(/\s+/).filter(Boolean);
+  if (parts.length < 2) {
+    return false;
+  }
+  const pathPartCount = parts.filter((part) => isPathLikeQueryPart(part)).length;
+  const exactSymbolCount = parts.filter((part) => isLikelyExactSymbolQuery(part)).length;
+  return pathPartCount >= 2 || exactSymbolCount >= 3;
+}
+
 function setFilter(filters: ScalarFilters, key: keyof ScalarFilters, value: string): void {
   switch (key) {
     case 'language':
@@ -192,6 +211,9 @@ function classifyIntent(text: string, filters: ScalarFilters): FusionIntent {
   if (containsHint(terms, FRESHNESS_STATUS_HINTS)) {
     return 'freshness/status';
   }
+  if (isExactSymbolBundleQuery(text) || isAnchorDenseBundleQuery(text)) {
+    return 'exact-symbol';
+  }
   if (containsHint(terms, GRAPH_NAVIGATION_HINTS)) {
     return 'graph-navigation';
   }
@@ -212,7 +234,7 @@ function routeParsedQuery(text: string, filters: ScalarFilters, intent: FusionIn
     case 'semantic-ranking':
       return 'vector-first';
     case 'graph-navigation':
-      return containsHint(queryTerms(text, filters), GRAPH_FIRST_HINTS) ? 'graph-first' : 'hybrid';
+      return routeGraphNavigationQuery(text, filters);
     case 'freshness/status':
     case 'compression-feedback':
       return 'hybrid';
@@ -221,4 +243,26 @@ function routeParsedQuery(text: string, filters: ScalarFilters, intent: FusionIn
 
 function containsHint(terms: readonly string[], hints: ReadonlySet<string>): boolean {
   return terms.some((term) => hints.has(term));
+}
+
+function routeGraphNavigationQuery(text: string, filters: ScalarFilters): QueryRoute {
+  const terms = queryTerms(text, filters);
+  if (containsHint(terms, GRAPH_FIRST_HINTS)) {
+    return 'graph-first';
+  }
+  if (containsHint(terms, GRAPH_NAVIGATION_HINTS)) {
+    return 'hybrid';
+  }
+  return isPathHeavyQuery(text, filters) ? 'graph-first-filter' : 'hybrid';
+}
+
+function isPathHeavyQuery(text: string, filters: ScalarFilters): boolean {
+  if (filters.path || filters.file) {
+    return false;
+  }
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return /[\\/]/.test(trimmed) || /::/.test(trimmed) || /\.[A-Za-z0-9]{1,8}\b/.test(trimmed);
 }

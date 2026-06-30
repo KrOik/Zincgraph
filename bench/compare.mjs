@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { parsePoolBenchmarkArgs, runPoolBenchmark } from './pool-benchmark-runner.mjs';
+import { parsePoolBenchmarkArgs, runPoolComparison } from './pool-benchmark-runner.mjs';
 
 export const WEIGHTS = Object.freeze({
   retrieval: 30,
@@ -687,7 +687,7 @@ export function loadBenchmarkPool(poolPath = BENCHMARK_POOL_PATH) {
 
 async function main() {
   const options = parsePoolBenchmarkArgs(process.argv.slice(2));
-  const result = await runPoolBenchmark(options);
+  const result = await runPoolComparison(options);
   console.log(JSON.stringify(result.summary, null, 2));
   console.log(`\n${result.report}`);
   if (!result.summary.accepted) {

@@ -221,6 +221,25 @@ describe('Phase 1 code-to-vector pipeline', () => {
     expect(buildNodeText(sampleSnapshot().nodes[0]!)).toContain('return decodeJwt');
   });
 
+  test('adds normalized identifier tokens for underscore and camelCase evidence', () => {
+    const node = {
+      ...sampleSnapshot().nodes[0]!,
+      filePath: 'pkg/registry/apis/datasource/sub_proxy_loader.go',
+      qualifiedName: 'pkg/registry/apis/datasource/sub_proxy_loader.go::datasourceLoader::GetHTTPTransport',
+      name: 'GetHTTPTransport',
+      signature: 'func (d *datasourceLoader) GetHTTPTransport()',
+      docstring: 'Loads HTTP transport settings',
+      sourceSnippet: 'return transport',
+      calls: []
+    };
+
+    const text = buildNodeText(node);
+    expect(text).toContain('normalized path');
+    expect(text).toMatch(/normalized path .*\bproxy\b/);
+    expect(text).toContain('normalized qualified');
+    expect(text).toContain('get http transport');
+  });
+
   test('creates vector documents traceable to CodeGraph node ids', async () => {
     const [document] = await createVectorDocuments(sampleSnapshot());
     expect(document?.nodeId).toBe('node-1');

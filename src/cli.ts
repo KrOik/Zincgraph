@@ -3,14 +3,14 @@ import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 
 import { runCodeGraphCli as defaultRunCodeGraphCli } from './bridge/codegraphAdapter.js';
 import { runPonytailReview as defaultRunPonytailReview } from './bridge/ponytailAdapter.js';
 import { probeZvec } from './bridge/zvecAdapter.js';
 import { vectorizeProject } from './vector/code-to-vectors.js';
 import { runVectorizeCommand } from './vector/vectorize-command.js';
-import { buildRegistryFastCapsule, formatFastGraphNavigation, type ParsedArgs as FastParsedArgs, type Snapshot as FastSnapshot } from './fast-cli.js';
+import { buildFastContextCapsule, buildRegistryFastCapsule, formatFastGraphNavigation, type ParsedArgs as FastParsedArgs, type Snapshot as FastSnapshot } from './fast-cli.js';
 import { TopoSemanticQueryEngine, type ContextCapsule } from './fusion/query-engine.js';
 import { summarizeContextCapsule } from './fusion/context-summary.js';
 import { FreshnessGate, type FreshnessGateOptions, type FreshnessGateResult } from './freshness/freshness-gate.js';
@@ -328,9 +328,20 @@ export function buildCli(cliOptions: CliBuildOptions = {}): Command {
     .option('--topk <number>', 'maximum result count', parsePositiveInteger, 10)
     .option('--max-tokens <number>', 'context token budget', parsePositiveInteger, 8000)
     .option('--full-json', 'print the full context capsule including documents, edges, and context excerpts')
+    .addOption(new Option('--fast-full-json', 'use the optimized graph-first capsule for --full-json').hideHelp())
     .description('Run Zincgraph fusion explore (graph + vector + lexical text + freshness)')
-    .action(async (queryParts: string[], options: { project: string; topk: number; maxTokens: number; fullJson?: boolean }) => {
+    .action(async (queryParts: string[], options: { project: string; topk: number; maxTokens: number; fullJson?: boolean; fastFullJson?: boolean }) => {
       const query = queryParts.join(' ');
+      if (options.fullJson && options.fastFullJson && !cliOptions.createFusionEngine && shouldUseFastFullJson(query)) {
+        const capsule = await requireFastFullJsonCapsule('explore', {
+          project: options.project,
+          query,
+          topk: options.topk,
+          maxTokens: options.maxTokens
+        });
+        console.log(JSON.stringify(compactFastFullJsonCapsule(capsule, options.topk)));
+        return;
+      }
       const fastCapsule = await buildRegistryFastCapsule({
         project: options.project,
         query,
@@ -355,8 +366,9 @@ export function buildCli(cliOptions: CliBuildOptions = {}): Command {
     .option('--kind <kind>', 'CodeGraph symbol kind filter when --codegraph is used')
     .option('--json', 'request JSON output when --codegraph is used')
     .option('--full-json', 'print the full context capsule including documents, edges, and context excerpts')
+    .addOption(new Option('--fast-full-json', 'use the optimized graph-first capsule for --full-json').hideHelp())
     .description('Run Zincgraph fusion search by default; use --codegraph for upstream CodeGraph query')
-    .action(async (queryParts: string[], options: { project: string; topk: number; maxTokens: number; codegraph?: boolean; kind?: string; json?: boolean; fullJson?: boolean }) => {
+    .action(async (queryParts: string[], options: { project: string; topk: number; maxTokens: number; codegraph?: boolean; kind?: string; json?: boolean; fullJson?: boolean; fastFullJson?: boolean }) => {
       const query = queryParts.join(' ');
       if (options.codegraph) {
         const args = ['query', query, '-p', options.project, '--limit', String(options.topk)];
@@ -367,6 +379,16 @@ export function buildCli(cliOptions: CliBuildOptions = {}): Command {
           args.push('--json');
         }
         writeCodeGraphResult(runCodeGraph(cliOptions)(args));
+        return;
+      }
+      if (options.fullJson && options.fastFullJson && !cliOptions.createFusionEngine && shouldUseFastFullJson(query)) {
+        const capsule = await requireFastFullJsonCapsule('search', {
+          project: options.project,
+          query,
+          topk: options.topk,
+          maxTokens: options.maxTokens
+        });
+        console.log(JSON.stringify(compactFastFullJsonCapsule(capsule, options.topk)));
         return;
       }
       const fastCapsule = await buildRegistryFastCapsule({
@@ -659,6 +681,108 @@ function fusionCliOptions(
 ): { topk: number; maxTokens: number; createFusionEngine?: (projectPath: string) => FusionEngineLike } {
   const base = { topk: options.topk, maxTokens: options.maxTokens };
   return cliOptions.createFusionEngine ? { ...base, createFusionEngine: cliOptions.createFusionEngine } : base;
+}
+
+function shouldUseFastFullJson(_query: string): boolean {
+  // The fast capsule is an explicit benchmark/diagnostic opt-in rather than
+  // the default public --full-json contract. When opted in, failures are not
+  // swallowed so the benchmarked retrieval path cannot be masked by fallback.
+  return true;
+}
+
+async function requireFastFullJsonCapsule(
+  command: 'explore' | 'search',
+  options: FastParsedArgs
+): Promise<Record<string, unknown>> {
+  const fastContextCapsule = await buildFastContextCapsule(command, options);
+  if (!fastContextCapsule) {
+    throw new Error(`Fast full-json ${command} path did not produce a context capsule.`);
+  }
+  return fastContextCapsule;
+}
+
+function compactFastFullJsonCapsule(capsule: Record<string, unknown>, topk: number): Record<string, unknown> {
+  const nodes = Array.isArray(capsule.nodes) ? capsule.nodes : [];
+  const compactNodes = uniqueFastFullJsonNodes(nodes)
+    .map((node, index) => compactFastFullJsonNode(node, index, topk));
+  const compact: Record<string, unknown> = {
+    query: capsule.query,
+    intent: capsule.intent,
+    route: capsule.route,
+    nodes: compactNodes,
+    evidence: typeof capsule.evidence === 'string' ? truncateForFastJson(capsule.evidence, 120) : capsule.evidence
+  };
+  if (capsule.filters && Object.keys(capsule.filters as Record<string, unknown>).length > 0) {
+    compact.filters = capsule.filters;
+  }
+  if (hasNonEmptyFreshness(capsule.freshness)) {
+    compact.freshness = capsule.freshness;
+  }
+  return compact;
+}
+
+function uniqueFastFullJsonNodes(nodes: unknown[]): unknown[] {
+  const seen = new Set<string>();
+  const unique: unknown[] = [];
+  for (const node of nodes) {
+    const value = node && typeof node === 'object' ? node as Record<string, unknown> : {};
+    const key = [
+      value.filePath,
+      value.qualifiedName,
+      value.name
+    ].map((part) => String(part ?? '')).join('\0');
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    unique.push(node);
+  }
+  return unique;
+}
+
+function compactFastFullJsonNode(node: unknown, index: number, topk: number): Record<string, unknown> {
+  const value = node && typeof node === 'object' ? node as Record<string, unknown> : {};
+  const isTopNode = index < Math.max(1, topk);
+  const compact: Record<string, unknown> = {
+    filePath: value.filePath,
+    qualifiedName: value.qualifiedName,
+    toolRank: value.toolRank ?? index
+  };
+  if (!compact.qualifiedName && value.name) {
+    compact.name = value.name;
+  }
+  if (isTopNode) {
+    if (typeof value.signature === 'string' && value.signature.length > 0) {
+      compact.signature = truncateForFastJson(value.signature, 120);
+    }
+    if (typeof value.content === 'string' && value.content.length > 0) {
+      compact.content = truncateForFastJson(value.content, 180);
+    }
+  }
+  if (value.freshnessState !== undefined) {
+    compact.freshnessState = value.freshnessState;
+  }
+  return compact;
+}
+
+function truncateForFastJson(value: string, maxChars: number): string {
+  return value.replace(/\s+/g, ' ').trim().slice(0, maxChars);
+}
+
+function hasNonEmptyFreshness(value: unknown): boolean {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  const freshness = value as Record<string, unknown>;
+  return Object.entries(freshness).some(([key, entry]) => {
+    if (key === 'isFresh') {
+      return entry === false;
+    }
+    if (Array.isArray(entry)) {
+      return entry.length > 0;
+    }
+    return typeof entry === 'number' ? entry > 0 : Boolean(entry);
+  });
 }
 
 function writeDelegatedStatusOutput(stdout: string | undefined): void {

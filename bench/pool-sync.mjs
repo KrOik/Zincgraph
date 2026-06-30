@@ -22,7 +22,8 @@ export function parsePoolSyncArgs(argv) {
     archiveDir: DEFAULT_ARCHIVE_DIR,
     dryRun: false,
     shallow: true,
-    tiers: [...DEFAULT_TIERS]
+    tiers: [...DEFAULT_TIERS],
+    repos: []
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -63,9 +64,15 @@ export function parsePoolSyncArgs(argv) {
       index += 1;
       continue;
     }
+    if (arg === '--repo') {
+      options.repos.push(String(argv[index + 1]));
+      index += 1;
+      continue;
+    }
     throw new Error(`Unknown argument: ${arg}`);
   }
   options.tiers = [...new Set(options.tiers)];
+  options.repos = [...new Set(options.repos.filter(Boolean))];
   return options;
 }
 
@@ -77,9 +84,14 @@ export function materializeBenchmarkPool(options = {}) {
   const dryRun = options.dryRun === true;
   const shallow = options.shallow !== false;
   const requestedTiers = [...new Set(options.tiers ?? DEFAULT_TIERS)];
+  const requestedRepos = [...new Set(options.repos ?? [])];
   const pool = loadBenchmarkPool(poolPath).raw ?? {};
   const repos = Array.isArray(pool.repos) ? pool.repos : [];
-  const selectedRepos = repos.filter((repo) => requestedTiers.includes(String(repo.tier)));
+  const selectedRepos = repos.filter((repo) => {
+    if (!requestedTiers.includes(String(repo.tier))) return false;
+    if (requestedRepos.length > 0 && !requestedRepos.includes(String(repo.id))) return false;
+    return true;
+  });
   const actions = [];
   const errors = [];
   const warnings = [];
@@ -153,6 +165,7 @@ export function materializeBenchmarkPool(options = {}) {
     dryRun,
     shallow,
     requestedTiers,
+    requestedRepos,
     actions,
     errors,
     warnings

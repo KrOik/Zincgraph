@@ -6,6 +6,7 @@ export interface PoolSyncOptions {
   dryRun?: boolean;
   shallow?: boolean;
   tiers?: string[];
+  repos?: string[];
 }
 
 export function parsePoolSyncArgs(argv: string[]): {
@@ -16,6 +17,7 @@ export function parsePoolSyncArgs(argv: string[]): {
   dryRun: boolean;
   shallow: boolean;
   tiers: string[];
+  repos: string[];
 };
 
 export function materializeBenchmarkPool(options?: PoolSyncOptions): {
@@ -27,6 +29,7 @@ export function materializeBenchmarkPool(options?: PoolSyncOptions): {
   dryRun: boolean;
   shallow: boolean;
   requestedTiers: string[];
+  requestedRepos: string[];
   actions: Array<Record<string, any>>;
   errors: string[];
   warnings: string[];
